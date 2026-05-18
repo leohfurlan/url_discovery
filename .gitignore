@@ -1,0 +1,68 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.Python
+
+# Ambientes virtuais
+.venv/
+venv/
+env/
+ENV/
+
+# Variaveis de ambiente e segredos locais
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+
+# Testes, cobertura e caches
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+
+# Build e pacotes
+build/
+dist/
+*.egg-info/
+*.egg
+pip-wheel-metadata/
+
+# Playwright e saidas de navegacao
+playwright-report/
+test-results/
+blob-report/
+*_inicial.png
+*_formulario.png
+screenshots/
+
+# Logs e arquivos temporarios
+*.log
+*.tmp
+*.temp
+tmp/
+temp/
+
+# Banco de dados local
+*.db
+*.sqlite
+*.sqlite3
+
+# IDEs e sistema operacional
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini
