@@ -2,6 +2,9 @@ import asyncio
 import os
 
 import pytest
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from domain.entities.form import FieldType, FormField, SemanticType
 from infrastructure.llm.gemma_adapter import GemmaClassifier

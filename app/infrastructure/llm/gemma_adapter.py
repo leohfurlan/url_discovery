@@ -10,7 +10,7 @@ from domain.services.classifier_port import ClassifierPort
 
 class GemmaClassifier(ClassifierPort):
 
-    def __init__(self, model: str = "gemma-4-26b-it", api_key: str | None = None):
+    def __init__(self, model: str = "gemma-4-26b-a4b-it", api_key: str | None = None):
         load_dotenv()
         self._client = google_genai.Client(api_key=api_key or os.getenv("GEMINI_API_KEY"))
         self._model = model

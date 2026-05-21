@@ -97,7 +97,7 @@ def classify_by_heuristic(field: FormField) -> SemanticType:
 
 _SEMANTIC_TYPES = [t.value for t in SemanticType if t != SemanticType.UNKNOWN]
 
-# DEFININDO A CLASSIFICAÇÃO POR LLM (GEMINI 2.0 FLASH) COMO BACKUP PARA CASOS NÃO CLAROS PELA HEURÍSTICA
+# DEFININDO A CLASSIFICAÇÃO POR LLM (GEMMA 4.0 26B A4B) COMO BACKUP PARA CASOS NÃO CLAROS PELA HEURÍSTICA
 
 def classify_by_llm(field: FormField) -> SemanticType:
     hint = field.semantic_hint
