@@ -1,0 +1,116 @@
+import asyncio
+import os
+
+import pytest
+
+from domain.entities.form import FieldType, FormField, SemanticType
+from infrastructure.llm.gemma_adapter import GemmaClassifier
+
+
+def make_classifier() -> GemmaClassifier:
+    return GemmaClassifier.__new__(GemmaClassifier)
+
+
+class TestExtractHints:
+    def test_extract_hints(self):
+        classifier = make_classifier()
+        fields = [
+            FormField(
+                tag="input",
+                field_type=FieldType.TEXT,
+                label="CNPJ",
+                name="document",
+                id="cnpj",
+                placeholder="00.000.000/0000-00",
+                selector="#cnpj",
+            ),
+            FormField(
+                tag="input",
+                field_type=FieldType.EMAIL,
+                label="E-mail",
+                selector="#email",
+            ),
+        ]
+
+        assert classifier._extract_hints(fields) == [
+            {
+                "index": 0,
+                "label": "CNPJ",
+                "name": "document",
+                "id": "cnpj",
+                "placeholder": "00.000.000/0000-00",
+            },
+            {"index": 1, "label": "E-mail"},
+        ]
+
+
+class TestReconstruct:
+    def test_reconstruct_preenche_semantic_type(self):
+        classifier = make_classifier()
+        fields = [
+            FormField(
+                tag="input",
+                field_type=FieldType.TEXT,
+                label="CNPJ",
+                selector="#cnpj",
+            )
+        ]
+
+        result = classifier._reconstruct(
+            fields,
+            [{"index": 0, "semantic_type": "cnpj"}],
+        )
+
+        assert result[0].semantic_type == SemanticType.CNPJ
+        assert fields[0].semantic_type is None
+
+    def test_reconstruct_usa_unknown_quando_tipo_for_invalido(self):
+        classifier = make_classifier()
+        fields = [
+            FormField(
+                tag="input",
+                field_type=FieldType.TEXT,
+                label="Campo estranho",
+                selector="#campo",
+            )
+        ]
+
+        result = classifier._reconstruct(
+            fields,
+            [{"index": 0, "semantic_type": "tipo_invalido"}],
+        )
+
+        assert result[0].semantic_type == SemanticType.UNKNOWN
+
+
+class TestCallLlmSemChave:
+    def test_retorna_unknown_sem_gemini_api_key(self, monkeypatch):
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        classifier = make_classifier()
+
+        result = asyncio.run(
+            classifier._call_llm([{"index": 0, "label": "CNPJ"}])
+        )
+
+        assert result == [{"index": 0, "semantic_type": "unknown"}]
+
+
+@pytest.mark.skipif(
+    not os.getenv("GEMINI_API_KEY"),
+    reason="Precisa de GEMINI_API_KEY para chamar o LLM real.",
+)
+class TestClassificarComLLM:
+    def test_classifica_cnpj(self):
+        classifier = GemmaClassifier()
+        fields = [
+            FormField(
+                tag="input",
+                field_type=FieldType.TEXT,
+                label="CNPJ",
+                selector="#cnpj",
+            )
+        ]
+
+        result = asyncio.run(classifier.classify(fields))
+
+        assert result[0].semantic_type == SemanticType.CNPJ
