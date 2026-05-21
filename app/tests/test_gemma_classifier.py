@@ -84,14 +84,13 @@ class TestReconstruct:
 
 
 class TestCallLlmSemChave:
-    def test_retorna_unknown_sem_gemini_api_key(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_retorna_unknown_sem_gemini_api_key(self, monkeypatch):
         monkeypatch.delenv("GEMINI_API_KEY", raising=False)
         classifier = make_classifier()
 
-        result = asyncio.run(
-            classifier._call_llm([{"index": 0, "label": "CNPJ"}])
-        )
-
+        result = await classifier._call_llm([{"index": 0, "label": "CNPJ"}])
+   
         assert result == [{"index": 0, "semantic_type": "unknown"}]
 
 
@@ -100,7 +99,8 @@ class TestCallLlmSemChave:
     reason="Precisa de GEMINI_API_KEY para chamar o LLM real.",
 )
 class TestClassificarComLLM:
-    def test_classifica_cnpj(self):
+    @pytest.mark.asyncio
+    async def test_classifica_cnpj(self):
         classifier = GemmaClassifier()
         fields = [
             FormField(
@@ -111,6 +111,7 @@ class TestClassificarComLLM:
             )
         ]
 
-        result = asyncio.run(classifier.classify(fields))
+        result = await classifier.classify(fields)
+        
 
         assert result[0].semantic_type == SemanticType.CNPJ
