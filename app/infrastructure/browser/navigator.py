@@ -34,6 +34,18 @@ logger = structlog.get_logger(__name__)
 _NEXT_BUTTON_SELECTORS = [
     'button[type="submit"]',
     'input[type="submit"]',
+    # Cover/intro page — formulários que iniciam com uma página de apresentação
+    'button:has-text("Iniciar")',
+    'button:has-text("Iniciar agora")',
+    'button:has-text("Começar")',
+    'button:has-text("Start now")',
+    'button:has-text("Start")',
+    'button:has-text("Begin")',
+    # Submissão final (ex: Microsoft Forms)
+    'button:has-text("Submit")',
+    'button:has-text("Enviar")',
+    'button:has-text("Submeter")',
+    # Progressão multi-página
     'button:has-text("Próximo")',
     'button:has-text("Continuar")',
     'button:has-text("Avançar")',
@@ -146,16 +158,20 @@ class NavigationOrchestrator:
 
                 if not raw_fields:
                     logger.warning("no_fields_found", page=page_num)
-                    # Pode ser página de confirmação — verifica indicadores
-                    if await self._is_success_page():
+                    # Só considera sucesso se já preenchemos pelo menos uma página —
+                    # evita falso positivo na cover page (que pode ter "obrigado"
+                    # ou "confirmação" na descrição do formulário)
+                    if report.steps and await self._is_success_page():
                         session.status = FormStatus.COMPLETED
                         logger.info("success_page_detected", page=page_num)
                         break
-                    # Tenta clicar em próximo mesmo assim (pode ser step sem campos)
+                    # Pode ser cover/intro page — tenta clicar em "Iniciar", "Próximo", etc.
                     advanced = await self._click_next(page_num, portal_name)
                     if not advanced:
                         report.result = NavigationResult.NEXT_BUTTON_NOT_FOUND
                         break
+                    # Aguarda SPA renderizar os campos após o clique
+                    await self._wait_for_stable_dom()
                     continue
 
                 form_page = FormPage(page_number=page_num, fields=raw_fields)
@@ -236,6 +252,9 @@ class NavigationOrchestrator:
     async def _click_next(self, page_num: int, portal_name: str) -> bool:
         """
         Tenta clicar no botão de avanço usando lista priorizada de seletores.
+        Itera por TODOS os matches de cada seletor — evita pegar o primeiro
+        elemento invisível quando há duplicatas no DOM (ex: Microsoft Forms
+        renderiza dois botões "Start now", o primeiro fora da viewport).
         Retorna True se conseguiu clicar.
         """
         fl = self._page.frame_locator(self._iframe_selector) if self._iframe_selector else None
@@ -244,13 +263,13 @@ class NavigationOrchestrator:
             locator = fl.locator(selector) if fl else self._page.locator(selector)
             try:
                 count = await locator.count()
-                if count > 0:
-                    btn = locator.first
+                for i in range(count):
+                    btn = locator.nth(i)
                     is_visible = await btn.is_visible()
                     is_enabled = await btn.is_enabled()
                     if is_visible and is_enabled:
                         await btn.click()
-                        logger.info("next_button_clicked", selector=selector, page=page_num)
+                        logger.info("next_button_clicked", selector=selector, index=i, page=page_num)
                         return True
             except Exception:
                 continue
@@ -266,13 +285,28 @@ class NavigationOrchestrator:
         except Exception:
             return False
 
-    @staticmethod
-    async def _wait_for_stable_dom(timeout_ms: int = 3_000) -> None:
+    async def _wait_for_stable_dom(self) -> None:
         """
-        Aguarda o DOM estabilizar após navegação.
-        Usa networkidle como proxy de "página carregada".
+        Aguarda o DOM estabilizar após navegação ou clique.
+        Primeiro tenta detectar campos no DOM (bom para SPAs como Microsoft Forms);
+        cai para sleep fixo se nenhum campo aparecer no timeout.
+        Usa state="visible" para garantir que o React/SPA populou os atributos
+        (id, name, aria-*) antes do crawler tentar extraí-los.
         """
-        await asyncio.sleep(0.5)  # margem mínima
+        await asyncio.sleep(0.5)  # margem mínima antes de checar
+        root = (
+            self._page.frame_locator(self._iframe_selector)
+            if self._iframe_selector
+            else self._page
+        )
+        field_sel = (
+            "input:not([type='hidden']):not([type='submit']):not([type='button']),"
+            "select,textarea"
+        )
+        try:
+            await root.locator(field_sel).first.wait_for(state="visible", timeout=8_000)
+        except Exception:
+            await asyncio.sleep(2.0)
 
 
 # ------------------------------------------------------------------

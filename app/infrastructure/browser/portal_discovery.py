@@ -213,10 +213,16 @@ class PortalDiscovery:
             return None
 
     async def _wait_for_load(self, page: Page) -> None:
+        # networkidle garante que SPAs (ex: Microsoft Forms, Google Forms)
+        # terminaram o render inicial antes de prosseguirmos.
+        # Fallback para domcontentloaded se networkidle demorar demais.
         try:
-            await page.wait_for_load_state("domcontentloaded", timeout=self._nav_timeout)
+            await page.wait_for_load_state("networkidle", timeout=self._nav_timeout)
         except Exception:
-            pass
+            try:
+                await page.wait_for_load_state("domcontentloaded", timeout=5_000)
+            except Exception:
+                pass
 
     @staticmethod
     async def _detect_iframe_selector(page: Page) -> str | None:

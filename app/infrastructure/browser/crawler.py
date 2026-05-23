@@ -51,12 +51,10 @@ class DOMCrawler:
                             }
                         }
                         if (!labelText) labelText = el.getAttribute('aria-label') || '';
-                        if (!labelText) {
-                            const lblId = el.getAttribute('aria-labelledby');
-                            if (lblId) {
-                                const lblEl = document.getElementById(lblId);
-                                if (lblEl) labelText = lblEl.textContent.trim();
-                            }
+                        const ariaLabelledby = el.getAttribute('aria-labelledby') || '';
+                        if (!labelText && ariaLabelledby) {
+                            const lblEl = document.getElementById(ariaLabelledby);
+                            if (lblEl) labelText = lblEl.textContent.trim();
                         }
                         return {
                             tag: el.tagName.toLowerCase(),
@@ -66,6 +64,7 @@ class DOMCrawler:
                             placeholder: el.placeholder || '',
                             required: el.required || false,
                             label: labelText,
+                            ariaLabelledby: ariaLabelledby,
                             options: el.tagName === 'SELECT'
                                 ? Array.from(el.options)
                                     .map(o => o.text.trim())
@@ -125,6 +124,9 @@ def _build_selector(attrs: dict) -> str | None:
         if t:
             return f'{tag}[type="{t}"][name="{name}"]'
         return f'{tag}[name="{name}"]'
+    # Fallback para formulários SPA (ex: Microsoft Forms) que não usam id/name
+    if attrs.get("ariaLabelledby"):
+        return f'[aria-labelledby="{attrs["ariaLabelledby"]}"]'
     return None
 
 

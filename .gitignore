@@ -53,6 +53,7 @@ screenshots/
 *.temp
 tmp/
 temp/
+diag_*
 
 # Banco de dados local
 *.db
