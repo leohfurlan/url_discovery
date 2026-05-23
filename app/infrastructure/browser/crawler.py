@@ -33,13 +33,25 @@ class DOMCrawler:
             el = locator.nth(i)
             try:
                 attrs = await el.evaluate(
-                    """el => {
-                        // Resolve label text: <label for="id">, parent <label>, aria-label, aria-labelledby
+                    r"""el => {
+                        // Resolve label text via aria-labelledby (suporta múltiplos IDs separados por espaço)
+                        const ariaLabelledby = el.getAttribute('aria-labelledby') || '';
                         let labelText = '';
-                        if (el.id) {
+                        if (ariaLabelledby) {
+                            labelText = ariaLabelledby.trim().split(/\s+/)
+                                .map(id => {
+                                    const el2 = document.getElementById(id);
+                                    return el2 ? el2.textContent.trim() : '';
+                                })
+                                .filter(t => t)
+                                .join(' ');
+                        }
+                        // Fallback: <label for="id"> explícito
+                        if (!labelText && el.id) {
                             const lbl = document.querySelector('label[for="' + el.id + '"]');
                             if (lbl) labelText = lbl.textContent.trim();
                         }
+                        // Fallback: elemento <label> pai
                         if (!labelText) {
                             const parent = el.closest('label');
                             if (parent) {
@@ -50,12 +62,8 @@ class DOMCrawler:
                                     .join(' ');
                             }
                         }
+                        // Fallback: aria-label (pode ser genérico como "Single line text")
                         if (!labelText) labelText = el.getAttribute('aria-label') || '';
-                        const ariaLabelledby = el.getAttribute('aria-labelledby') || '';
-                        if (!labelText && ariaLabelledby) {
-                            const lblEl = document.getElementById(ariaLabelledby);
-                            if (lblEl) labelText = lblEl.textContent.trim();
-                        }
                         return {
                             tag: el.tagName.toLowerCase(),
                             type: (el.type || '').toLowerCase(),

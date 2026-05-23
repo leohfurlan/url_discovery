@@ -18,11 +18,15 @@ Exemplos:
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 from pathlib import Path
 
 import structlog
 import typer
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Garante que app/ está no path quando executado diretamente
 _APP_DIR = Path(__file__).parent
@@ -48,11 +52,28 @@ def main(
     iframe: str | None = typer.Option(None, "--iframe", help="Seletor CSS do iframe, se já conhecido (pula a discovery)"),
     screenshot_dir: str | None = typer.Option(None, "--screenshots", help="Diretório para salvar screenshots (padrão: /tmp)"),
     model: str = typer.Option("gemma-4-26b-a4b-it", "--model", help="Modelo Gemini para classificação semântica"),
+    submit: bool = typer.Option(None, "--submit/--no-submit", help="Submete o formulário após preencher (sobrescreve ALLOW_FORM_SUBMIT do .env)"),
 ) -> None:
-    """Descobre e preenche automaticamente o formulário de cadastro de fornecedor."""
+    """Descobre e preenche automaticamente o formulário de cadastro de fornecedor.
+
+    AVISO: por padrão (ALLOW_FORM_SUBMIT=false) o agente preenche os campos
+    mas NÃO clica em Submit. Use --submit ou ALLOW_FORM_SUBMIT=true apenas
+    em produção, após validar os dados gerados para o portal.
+    """
+    # Resolução de prioridade: flag CLI > variável de ambiente > padrão seguro (false)
+    if submit is None:
+        allow_submit = os.environ.get("ALLOW_FORM_SUBMIT", "false").strip().lower() == "true"
+    else:
+        allow_submit = submit
+
+    if allow_submit:
+        typer.echo("⚠  ALLOW_FORM_SUBMIT=true — o formulário SERÁ submetido.", err=True)
+    else:
+        typer.echo("ℹ  ALLOW_FORM_SUBMIT=false — campos serão preenchidos mas NÃO submetidos.")
+
     try:
         report = asyncio.run(
-            _run(url, portal, headless, slow_fill, max_pages, iframe, screenshot_dir, model)
+            _run(url, portal, headless, slow_fill, max_pages, iframe, screenshot_dir, model, allow_submit)
         )
         _print_report(report, portal)
         raise typer.Exit(code=0 if report.result.name == "SUCCESS" else 1)
@@ -73,6 +94,7 @@ async def _run(
     iframe_selector: str | None,
     screenshot_dir: str | None,
     model: str,
+    allow_submit: bool,
 ):
     from playwright.async_api import async_playwright
     from infrastructure.llm.gemma_adapter import GemmaClassifier
@@ -119,6 +141,7 @@ async def _run(
             slow_fill=slow_fill,
             max_pages=max_pages,
             screenshot_dir=screenshot_dir,
+            allow_submit=allow_submit,
         )
 
         typer.echo("→ Iniciando preenchimento...")

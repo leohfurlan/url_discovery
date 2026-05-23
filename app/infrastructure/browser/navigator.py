@@ -30,7 +30,20 @@ from infrastructure.browser.filler import FormFiller
 
 logger = structlog.get_logger(__name__)
 
-# Seletores comuns para botões de avanço — ordem de prioridade
+# Seletores que representam submissão FINAL do formulário.
+# Quando ALLOW_FORM_SUBMIT=false, estes seletores são ignorados
+# e o agente para antes de enviar dados ao portal.
+_FINAL_SUBMIT_SELECTORS = frozenset({
+    'button[type="submit"]',
+    'input[type="submit"]',
+    'button:has-text("Submit")',
+    'button:has-text("Enviar")',
+    'button:has-text("Submeter")',
+})
+
+# Seletores comuns para botões de avanço — ordem de prioridade.
+# Os seletores de submissão final ficam no início para serem encontrados
+# primeiro, mas são filtrados por _FINAL_SUBMIT_SELECTORS quando necessário.
 _NEXT_BUTTON_SELECTORS = [
     'button[type="submit"]',
     'input[type="submit"]',
@@ -78,6 +91,7 @@ class NavigationResult(Enum):
     SUCCESS = auto()
     MAX_PAGES_REACHED = auto()
     NEXT_BUTTON_NOT_FOUND = auto()
+    SUBMIT_BLOCKED = auto()   # ALLOW_FORM_SUBMIT=false — campos preenchidos, Submit não clicado
     FILL_ERRORS = auto()
     EXCEPTION = auto()
 
@@ -124,6 +138,7 @@ class NavigationOrchestrator:
         max_pages: int = 15,
         screenshot_dir: str | None = None,
         slow_fill: bool = False,
+        allow_submit: bool = False,
         on_page_done: Callable[[StepReport], Awaitable[None]] | None = None,
     ) -> None:
         self._page = page
@@ -133,6 +148,7 @@ class NavigationOrchestrator:
         self._max_pages = max_pages
         self._screenshot_dir = screenshot_dir
         self._slow_fill = slow_fill
+        self._allow_submit = allow_submit
         self._on_page_done = on_page_done
 
     # ------------------------------------------------------------------
@@ -212,13 +228,29 @@ class NavigationOrchestrator:
                 if failures:
                     logger.warning("fill_failures", page=page_num, count=len(failures))
 
-                # 6. Verifica sucesso antes de tentar avançar
+                # 6. Avança / verifica estado pós-preenchimento
+                #
+                # Ordem importa:
+                #   a) Se allow_submit=False e o próximo botão é submissão final,
+                #      para ANTES de checar success — botão de Submit visível
+                #      prova que não estamos numa página de confirmação real.
+                #   b) Só então verifica se a página de sucesso já apareceu
+                #      (formulário submetido via outro mecanismo, ex: Enter).
+                if not self._allow_submit and await self._next_is_final_submit():
+                    logger.warning(
+                        "submit_blocked",
+                        page=page_num,
+                        portal=portal_name,
+                        reason="ALLOW_FORM_SUBMIT=false",
+                    )
+                    report.result = NavigationResult.SUBMIT_BLOCKED
+                    break
+
                 if await self._is_success_page():
                     session.status = FormStatus.COMPLETED
                     logger.info("success_after_fill", page=page_num)
                     break
 
-                # 7. Avança para próxima página
                 advanced = await self._click_next(page_num, portal_name)
                 if not advanced:
                     # Sem botão next pode significar formulário concluído
@@ -277,10 +309,29 @@ class NavigationOrchestrator:
         logger.warning("next_button_not_found", page=page_num, portal=portal_name)
         return False
 
+    async def _next_is_final_submit(self) -> bool:
+        """Verifica se o próximo botão visível e habilitado é um botão de submissão final."""
+        fl = self._page.frame_locator(self._iframe_selector) if self._iframe_selector else None
+        for selector in _FINAL_SUBMIT_SELECTORS:
+            locator = fl.locator(selector) if fl else self._page.locator(selector)
+            try:
+                count = await locator.count()
+                for i in range(count):
+                    btn = locator.nth(i)
+                    if await btn.is_visible() and await btn.is_enabled():
+                        return True
+            except Exception:
+                continue
+        return False
+
     async def _is_success_page(self) -> bool:
-        """Verifica se a página atual contém indicadores de conclusão."""
+        """Verifica se a página atual contém indicadores de conclusão.
+        Usa innerText (texto visível) em vez do HTML completo para evitar
+        falsos positivos com palavras de sucesso embutidas em bundles JS/CSS.
+        """
         try:
-            content = (await self._page.content()).lower()
+            text = await self._page.evaluate("document.body.innerText")
+            content = text.lower()
             return any(ind in content for ind in _SUCCESS_INDICATORS)
         except Exception:
             return False

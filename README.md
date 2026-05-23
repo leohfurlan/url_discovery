@@ -1,5 +1,15 @@
 # URL Discovery — Agente de Preenchimento de Formulários
 
+> **IMPORTANTE — O agente NÃO submete formulários por padrão.**
+>
+> O comportamento padrão é preencher todos os campos e parar **antes** de clicar em Submit/Enviar.
+> Nenhum dado é enviado ao portal sem autorização explícita.
+>
+> Para habilitar a submissão, defina `ALLOW_FORM_SUBMIT=true` no `.env`
+> **ou** use a flag `--submit` na linha de comando — somente após validar
+> manualmente os dados gerados para o portal em questão.
+> Veja a seção [Controle de Submissão](#controle-de-submissão) abaixo.
+
 Agente Python que acessa portais de fornecedores, descobre o formulário de cadastro automaticamente e o preenche com dados gerados por IA — sem intervenção manual.
 
 ## Como funciona
@@ -38,10 +48,14 @@ pip install -e ".[dev]"
 playwright install chromium
 ```
 
-Crie um arquivo `.env` na raiz com sua chave da Gemini API:
+Crie um arquivo `.env` na raiz baseado no `.env.example`:
 
 ```
 GEMINI_API_KEY=sua_chave_aqui
+
+# false = preenche e para antes do Submit (padrão/seguro para testes)
+# true  = submete o formulário (somente em produção autorizada)
+ALLOW_FORM_SUBMIT=false
 ```
 
 ## Como executar
@@ -80,6 +94,50 @@ python app\run.py --help
 | `--iframe` | auto | Seletor CSS do iframe, se já conhecido |
 | `--screenshots` | `/tmp` | Diretório para salvar screenshots |
 | `--model` | `gemma-4-26b-a4b-it` | Modelo Gemini para classificação |
+| `--submit` / `--no-submit` | env | Sobrescreve `ALLOW_FORM_SUBMIT` do `.env` |
+
+### Exemplos com controle de submissão
+
+```powershell
+# Padrão: preenche e para antes do Submit (seguro para testes)
+python app\run.py "https://portal.example.com" empresa
+
+# Forçar não-submissão mesmo que .env diga true
+python app\run.py "https://portal.example.com" empresa --no-submit
+
+# Habilitar submissão via flag (produção)
+python app\run.py "https://portal.example.com" empresa --submit
+```
+
+## Controle de Submissão
+
+**Por padrão o agente nunca envia dados.** O pipeline completo roda — descoberta, crawl, classificação, geração de valores e preenchimento — mas o clique no botão final (Submit / Enviar) é bloqueado.
+
+Isso garante que execuções de teste, CI e desenvolvimento não enviem dados reais a portais de fornecedores.
+
+### Resultado `SUBMIT_BLOCKED`
+
+Quando `ALLOW_FORM_SUBMIT=false` e o agente chega ao botão de submissão final, o log exibe:
+
+```
+[warning] submit_blocked  page=2  portal=...  reason=ALLOW_FORM_SUBMIT=false
+```
+
+E o relatório final mostra `Resultado: SUBMIT_BLOCKED` — indicando que o formulário foi preenchido com sucesso e estava pronto para envio, mas a submissão foi bloqueada por configuração.
+
+### Habilitando a submissão
+
+1. **Via `.env`** (persistente — afeta todas as execuções):
+   ```
+   ALLOW_FORM_SUBMIT=true
+   ```
+
+2. **Via flag CLI** (pontual — sobrescreve o `.env`):
+   ```powershell
+   python app\run.py "https://portal.example.com" empresa --submit
+   ```
+
+> **Atenção:** antes de habilitar, valide o screenshot gerado (`--screenshots`) para confirmar que os dados estão corretos para o portal específico. O classificador semântico nem sempre acerta 100% dos campos.
 
 ## Como executar os testes
 

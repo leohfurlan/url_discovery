@@ -1,7 +1,7 @@
 # TODO — Agente de Automação de Formulários
 
-> Última atualização: Dia 5
-> Status geral: **Fase 4 EM ANDAMENTO** — 3 de 4 fases concluídas + entradas da Fase 4 implementadas
+> Última atualização: Dia 6
+> Status geral: **Fase 4 EM ANDAMENTO** — 3 de 4 fases concluídas + avanço significativo na Fase 4
 
 ---
 
@@ -106,12 +106,36 @@
 - [x] **README atualizado** — pipeline completo, exemplos de uso, estrutura atual
 - [x] **Correções no domain model** — `FormStatus`, `filled_values`, `DESCONHECIDO`, `DOCUMENTO_PDF`
 
+### Concluído no Dia 6
+
+- [x] **Suporte a SPAs sem `id`/`name` nos campos (Microsoft Forms)** — `infrastructure/browser/crawler.py`
+  - `_build_selector` com fallback para `[aria-labelledby="..."]` quando `id` e `name` estão vazios
+  - Resolução de múltiplos IDs separados por espaço no `aria-labelledby` via `split(/\s+/)`
+  - Priorização de `aria-labelledby` sobre `aria-label` genérico (`'Single line text'`) na extração de labels
+  - Resultado: classificação semântica passou de `UNKNOWN` para `razao_social`, `cnpj`, `telefone`, etc.
+- [x] **`_wait_for_stable_dom` mais robusto** — `infrastructure/browser/navigator.py`
+  - `state="attached"` → `state="visible"` para garantir que React hidratou os atributos antes do crawl
+  - Timeout 6 s → 8 s; sleep de fallback 1.5 s → 2.0 s
+- [x] **Botões de submissão final adicionados** — `_NEXT_BUTTON_SELECTORS`
+  - `'button:has-text("Submit")'`, `'button:has-text("Enviar")'`, `'button:has-text("Submeter")'`, `'button:has-text("Start now")'`
+- [x] **Controle de submissão `ALLOW_FORM_SUBMIT`** — `.env`, `.env.example`, `run.py`, `navigator.py`
+  - `_FINAL_SUBMIT_SELECTORS` — conjunto de seletores que representam submissão final
+  - `NavigationResult.SUBMIT_BLOCKED` — resultado distinto quando Submit é bloqueado por config
+  - `_next_is_final_submit()` — helper que verifica se o próximo botão visível é de submissão final
+  - Flag CLI `--submit` / `--no-submit` — sobrescreve variável de ambiente pontualmente
+  - Check de bloqueio executa **antes** do `_is_success_page` — botão Submit visível prova que não é página de confirmação
+- [x] **`_is_success_page` sem falsos positivos** — usa `innerText` (texto visível) em vez de `page.content()` (HTML + JS bundle)
+- [x] **README atualizado** — aviso de segurança no topo, seção "Controle de Submissão", opção `--submit` na tabela
+- [x] **Validação em portal real** — AngloGold Ashanti testado e documentado
+  - 6/6 campos preenchidos com semântica correta
+  - Resultado: `SUBMIT_BLOCKED` — formulário pronto para envio, Submit não clicado
+
 ### Pendente
 
+- [ ] **Refinar extração de label Microsoft Forms** — usar `querySelector('span:nth-child(2)')` dentro do `QuestionId_...` para capturar título puro, sem número prefixado (`"1."`) e sem helper text do `QuestionInfo_...` (padrão XPath identificado: `//*[@id="QuestionId_r..."]/div[1]/span/span[1]/span[2]`)
 - [ ] Refinamento heurístico — reduzir dependência de labels exatos (fuzzy match para `UNKNOWN`)
 - [ ] Retry layer — decorator `@with_retry(max=3, backoff=1.5)` para `_fill_field` e `_click_next`
 - [ ] Anti-bot stealth — user-agent rotativo, mouse movement simulado, delays aleatórios
-- [ ] Validação em portal real — executar contra AngloGold ou Jaguar e documentar resultado
 - [ ] Tratamento de CAPTCHA — pausa e notificação quando detectado
 
 ### Entrega esperada
@@ -130,7 +154,7 @@
 | Upload com validação server-side | ✅ Parcial | PDF/PNG mínimos válidos — pode falhar em validação de conteúdo |
 | Captcha | ⚠️ Não encontrado ainda | Monitorar — pausa manual se aparecer |
 | MFA / autenticação externa | ⚠️ Não encontrado ainda | A avaliar |
-| Componentes altamente dinâmicos | 🔄 Parcial | Screenshot + slow_mo + 13 seletores de next button |
+| Componentes altamente dinâmicos (SPAs) | ✅ Resolvido | `aria-labelledby` multi-ID, `state="visible"`, seletores de Submit |
 | Bloqueios anti-bot | 🔄 Parcial | Fase 4 pendente — stealth mode |
 
 ---
