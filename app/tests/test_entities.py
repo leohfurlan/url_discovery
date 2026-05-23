@@ -51,7 +51,7 @@ def test_form_session_pending_fields():
     session = FormSession(
         portal="teste",
         url="https://exemplo.com",
-        pages=[FormPage(number=1, fields=[field_preenchido, field_vazio])]
+        pages=[FormPage(page_number=1, fields=[field_preenchido, field_vazio])]
     )
     assert len(session.pending_fields()) == 1
     assert session.pending_fields()[0].selector == "#b"

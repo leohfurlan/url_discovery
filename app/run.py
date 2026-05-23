@@ -1,0 +1,153 @@
+"""
+run.py — CLI do agente de preenchimento automático de formulários.
+
+O agente recebe a URL da página pública do portal (não o link direto
+do formulário), descobre o formulário automaticamente via PortalDiscovery
+e executa o pipeline completo: crawl → classify → generate → fill.
+
+Uso:
+    python run.py <URL> <PORTAL> [opções]
+
+Exemplos:
+    python run.py "https://portal.example.com/cadastro" 
+    python run.py "https://portal.example.com" empresa --headless
+    python run.py "https://portal.example.com" empresa --slow-fill --max-pages 20
+    python run.py "https://portal.example.com" empresa --iframe 'iframe[src*="forms.office.com"]'
+"""
+
+from __future__ import annotations
+
+import asyncio
+import sys
+from pathlib import Path
+
+import structlog
+import typer
+
+# Garante que app/ está no path quando executado diretamente
+_APP_DIR = Path(__file__).parent
+if str(_APP_DIR) not in sys.path:
+    sys.path.insert(0, str(_APP_DIR))
+
+logger = structlog.get_logger(__name__)
+
+app = typer.Typer(
+    name="url-discovery",
+    help="Agente de preenchimento automático de formulários em portais de fornecedores.",
+    add_completion=False,
+)
+
+
+@app.command()
+def main(
+    url: str = typer.Argument(..., help="URL da página pública do portal (não o link do formulário)"),
+    portal: str = typer.Argument(..., help="Nome do portal — usado em logs e nomes de screenshot"),
+    headless: bool = typer.Option(False, "--headless", help="Rodar sem janela do browser"),
+    slow_fill: bool = typer.Option(False, "--slow-fill", help="Delay extra entre campos (portais sensíveis a timing)"),
+    max_pages: int = typer.Option(15, "--max-pages", help="Limite de páginas do formulário"),
+    iframe: str | None = typer.Option(None, "--iframe", help="Seletor CSS do iframe, se já conhecido (pula a discovery)"),
+    screenshot_dir: str | None = typer.Option(None, "--screenshots", help="Diretório para salvar screenshots (padrão: /tmp)"),
+    model: str = typer.Option("gemma-4-26b-a4b-it", "--model", help="Modelo Gemini para classificação semântica"),
+) -> None:
+    """Descobre e preenche automaticamente o formulário de cadastro de fornecedor."""
+    try:
+        report = asyncio.run(
+            _run(url, portal, headless, slow_fill, max_pages, iframe, screenshot_dir, model)
+        )
+        _print_report(report, portal)
+        raise typer.Exit(code=0 if report.result.name == "SUCCESS" else 1)
+    except KeyboardInterrupt:
+        typer.echo("\nInterrompido pelo usuário.", err=True)
+        raise typer.Exit(code=130)
+    except Exception as exc:
+        typer.echo(f"\nErro fatal: {exc}", err=True)
+        raise typer.Exit(code=1)
+
+
+async def _run(
+    url: str,
+    portal: str,
+    headless: bool,
+    slow_fill: bool,
+    max_pages: int,
+    iframe_selector: str | None,
+    screenshot_dir: str | None,
+    model: str,
+):
+    from playwright.async_api import async_playwright
+    from infrastructure.llm.gemma_adapter import GemmaClassifier
+    from domain.services.generator import DataGenerator
+    from infrastructure.browser.portal_discovery import PortalDiscovery
+    from infrastructure.browser.navigator import NavigationOrchestrator
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=headless)
+        context = await browser.new_context(
+            viewport={"width": 1280, "height": 900},
+            locale="pt-BR",
+        )
+        page = await context.new_page()
+
+        typer.echo(f"→ Abrindo portal: {url}")
+        await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+
+        # Descoberta: localiza o formulário a partir da página do portal
+        if iframe_selector is None:
+            typer.echo("→ Procurando formulário na página...")
+            discovery = PortalDiscovery(page)
+            result = await discovery.find_and_navigate()
+            active_page = result.page
+            active_iframe = result.iframe_selector
+            typer.echo(
+                f"→ Formulário encontrado  [estratégia: {result.strategy}"
+                + (f"  iframe: {active_iframe}" if active_iframe else "")
+                + f"  url: {result.form_url}]"
+            )
+        else:
+            active_page = page
+            active_iframe = iframe_selector
+            typer.echo(f"→ Usando iframe informado: {active_iframe}")
+
+        classifier = GemmaClassifier(model=model)
+        generator = DataGenerator()
+
+        orchestrator = NavigationOrchestrator(
+            page=active_page,
+            classifier=classifier,
+            generator=generator,
+            iframe_selector=active_iframe,
+            slow_fill=slow_fill,
+            max_pages=max_pages,
+            screenshot_dir=screenshot_dir,
+        )
+
+        typer.echo("→ Iniciando preenchimento...")
+        report = await orchestrator.run(portal_name=portal)
+        await browser.close()
+        return report
+
+
+def _print_report(report, portal: str) -> None:
+    width = 52
+    typer.echo("\n" + "=" * width)
+    typer.echo(f"  Portal : {portal}")
+    typer.echo(f"  Resultado : {report.result.name}")
+    typer.echo(f"  URL final : {report.final_url}")
+    typer.echo(f"  Páginas   : {len(report.steps)}")
+    typer.echo("-" * width)
+    for step in report.steps:
+        mark = "✓" if not step.failures else "⚠"
+        typer.echo(
+            f"  {mark} Página {step.page_number:>2} — "
+            f"{step.fields_filled}/{step.fields_found} campos"
+            + (f"  falhas: {step.failures}" if step.failures else "")
+        )
+        if step.screenshot:
+            typer.echo(f"           screenshot: {step.screenshot}")
+    if report.error:
+        typer.echo(f"  Erro: {report.error}", err=True)
+    typer.echo("=" * width + "\n")
+
+
+if __name__ == "__main__":
+    app()

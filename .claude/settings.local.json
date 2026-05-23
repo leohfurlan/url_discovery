@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(Get-ChildItem -Path \"c:\\\\Projetos\\\\url_discovery\\\\app\\\\domain\\\\entities\" -Recurse)",
-      "Bash(python -m pytest tests/test_filler_navigator.py -v)"
+      "Bash(python -m pytest tests/test_filler_navigator.py -v)",
+      "Bash(xargs grep -l \"def main\\\\|if __name__\")"
     ]
   }
 }

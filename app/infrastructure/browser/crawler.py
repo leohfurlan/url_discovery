@@ -33,17 +33,46 @@ class DOMCrawler:
             el = locator.nth(i)
             try:
                 attrs = await el.evaluate(
-                    """el => ({
-                        tag: el.tagName.toLowerCase(),
-                        type: (el.type || '').toLowerCase(),
-                        name: el.name || '',
-                        id: el.id || '',
-                        placeholder: el.placeholder || '',
-                        required: el.required || false,
-                        options: el.tagName === 'SELECT'
-                            ? Array.from(el.options).map(o => o.value).filter(v => v)
-                            : [],
-                    })"""
+                    """el => {
+                        // Resolve label text: <label for="id">, parent <label>, aria-label, aria-labelledby
+                        let labelText = '';
+                        if (el.id) {
+                            const lbl = document.querySelector('label[for="' + el.id + '"]');
+                            if (lbl) labelText = lbl.textContent.trim();
+                        }
+                        if (!labelText) {
+                            const parent = el.closest('label');
+                            if (parent) {
+                                labelText = Array.from(parent.childNodes)
+                                    .filter(n => n.nodeType === Node.TEXT_NODE)
+                                    .map(n => n.textContent.trim())
+                                    .filter(t => t)
+                                    .join(' ');
+                            }
+                        }
+                        if (!labelText) labelText = el.getAttribute('aria-label') || '';
+                        if (!labelText) {
+                            const lblId = el.getAttribute('aria-labelledby');
+                            if (lblId) {
+                                const lblEl = document.getElementById(lblId);
+                                if (lblEl) labelText = lblEl.textContent.trim();
+                            }
+                        }
+                        return {
+                            tag: el.tagName.toLowerCase(),
+                            type: (el.type || '').toLowerCase(),
+                            name: el.name || '',
+                            id: el.id || '',
+                            placeholder: el.placeholder || '',
+                            required: el.required || false,
+                            label: labelText,
+                            options: el.tagName === 'SELECT'
+                                ? Array.from(el.options)
+                                    .map(o => o.text.trim())
+                                    .filter(v => v)
+                                : [],
+                        };
+                    }"""
                 )
             except Exception:
                 continue
@@ -57,6 +86,7 @@ class DOMCrawler:
                 FormField(
                     tag=attrs["tag"],
                     field_type=field_type,
+                    label=attrs["label"] or None,
                     name=attrs["name"] or None,
                     id=attrs["id"] or None,
                     placeholder=attrs["placeholder"] or None,
