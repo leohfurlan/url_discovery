@@ -79,3 +79,23 @@ def generate(semantic_type: SemanticType) -> str:
 
         case _:
             return fake.word()
+
+
+class DataGenerator:
+    """Gerador com memória de sessão para manter coerência entre campos relacionados."""
+
+    def __init__(self) -> None:
+        self._company_name: str | None = None
+
+    def generate(self, semantic_type: SemanticType) -> str:
+        value = self._produce(semantic_type)
+        if semantic_type in (SemanticType.RAZAO_SOCIAL, SemanticType.NOME_FANTASIA):
+            if self._company_name is None:
+                self._company_name = value
+        return value
+
+    def _produce(self, semantic_type: SemanticType) -> str:
+        if semantic_type == SemanticType.EMAIL_CORPORATIVO:
+            company = self._company_name or fake.company()
+            return company_email(company)
+        return generate(semantic_type)

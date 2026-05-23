@@ -1,7 +1,7 @@
 # TODO — Agente de Automação de Formulários
 
-> Última atualização: Dia 3 (fim)
-> Status geral: **Fase 2 concluída** — 2 de 4 fases entregues
+> Última atualização: Dia 4 (fim)
+> Status geral: **Fase 3 CONCLUÍDA** — 3 de 4 fases concluídas, Fase 4 pendente
 
 ---
 
@@ -20,13 +20,6 @@
 
 > ✅ Navegação automatizada funcionando — crawler abre portal, detecta iframe e conta campos corretamente.
 
-### Artefatos produzidos
-
-- `pyproject.toml` com todas as dependências
-- `.env.example` com variáveis de ambiente
-- Estrutura de diretórios hexagonal: `domain/`, `infrastructure/`, `interfaces/`, `tests/`
-- `risks.md` com riscos mapeados por portal
-
 ---
 
 ## Fase 2 — Parsing e Interpretação ✅ CONCLUÍDA
@@ -41,75 +34,86 @@
 
 ### Entrega
 
-> ✅ IA compreendendo os campos dinamicamente — dado um `FormField` com label arbitrário, o agente infere o tipo semântico correto via Gemma.
+> ✅ IA compreendendo os campos dinamicamente.
 
 ### Artefatos produzidos
 
-**Entidades de domínio** (`domain/entities/form.py`)
-- [x] `FieldType` — enum dos tipos estruturais do DOM (text, email, radio, select, file…)
-- [x] `SemanticType` — enum do que o agente infere (cnpj, razao_social, email_corporativo…)
-- [x] `FormField` — campo com seção DOM (crawler preenche) + seção semântica (LLM preenche)
-- [x] `FormPage` — página com lista de campos + número da página
-- [x] `FormSession` — estado de execução: página atual + valores preenchidos
-- [x] `ExecutionResult` — resultado final: sucesso/erro + evidências
-
-**Formatters** (`infrastructure/formatters/masks.py`)
-- [x] `format_cnpj()` — formatação e validação de CNPJ
-- [x] `format_cep()` — formatação de CEP
-- [x] `format_phone()` — formatação de telefone fixo e celular
-- [x] `company_email()` — geração de e-mail com domínio da empresa (resolve risco Jaguar pág. 7)
-- [x] Testes unitários — 17/17 passando
-
-**DOM Crawler** (`infrastructure/browser/crawler.py`)
-- [x] Detecção automática de iframe
-- [x] `frame_locator` transparente para os dois portais
-- [x] Extração de campos visíveis após interação inicial
-- [x] Screenshot automático na abertura
-
-**CLI** (`interfaces/cli/main.py`)
-- [x] Comando `crawl` com flags `--portal`, `--page`, `--no-headless`, `--slow-mo`
-- [x] Saída dos campos encontrados no terminal
-
-**Classificador semântico** (`domain/services/classifier_port.py` + `infrastructure/llm/gemma_adapter.py`)
-- [x] `ClassifierPort` — contrato abstrato com Template Method, `@final` no método público e `_ensure_contract` em runtime
-- [x] `GemmaClassifier` — adapter com `_extract_hints`, `_call_llm` (async nativo via `client.aio`) e `_reconstruct`
-- [x] Prompt com campos formatados por linha e saída JSON estruturada via `response_mime_type`
-- [x] Fallback para `SemanticType.UNKNOWN` quando sem chave ou resposta inválida
-- [x] Testes unitários — 4/4 passando (integração marcada com `skipif` aguardando chave no CI)
+- `domain/entities/form.py` — `FieldType`, `SemanticType`, `FormField`, `FormPage`, `FormSession`, `ExecutionResult`
+- `infrastructure/formatters/masks.py` — formatação CNPJ, CEP, telefone, e-mail corporativo
+- `infrastructure/browser/crawler.py` — `DOMCrawler` com suporte a iframe
+- `interfaces/cli/main.py` — comando `crawl`
+- `domain/services/classifier_port.py` + `infrastructure/llm/gemma_adapter.py` — classificador semântico
 
 ---
 
-## Fase 3 — Preenchimento Automatizado ⏳ PENDENTE
+## Fase 3 — Preenchimento Automatizado ✅ CONCLUÍDA
 
-**Estimativa:** 2 dias úteis | **Previsão:** Dias 4–5
+**Estimativa:** 2 dias úteis | **Executado em:** Dia 4
 
 ### Atividades
 
-- [ ] Geração de dados fake — integração Faker + LLM por `SemanticType`
-- [ ] Preenchimento automático — `FormFiller` usando Playwright
-- [ ] Upload de arquivos fake
-- [ ] Navegação entre etapas (multi-page flow)
+- [x] Geração de dados fake — `domain/services/generator.py` com 21 tipos semânticos — 8/8 testes passando
+- [x] Preenchimento automático — `infrastructure/browser/filler.py` (`FormFiller`)
+- [x] Upload de arquivos fake — geração de PDF/PNG mínimos válidos em `/tmp`
+- [x] Navegação entre etapas — `infrastructure/browser/navigator.py` (`NavigationOrchestrator`)
 
-### Entrega esperada
+### Entrega
 
-> Fluxo automatizado funcionando ponta a ponta nos portais AngloGold e Jaguar.
+> ✅ Fluxo automatizado ponta a ponta implementado.
+
+### Artefatos produzidos
+
+**FormFiller** (`infrastructure/browser/filler.py`)
+- [x] `FormFiller` — preenche `FormPage` usando valores de `FormSession`
+- [x] Roteador por `FieldType`: text, email, tel, number, textarea, select, radio, checkbox, file, date
+- [x] `_fill_select` — fallback em 3 níveis: value → label → primeira opção não-vazia
+- [x] `_fill_radio` — busca por `name + value`, fallback no primeiro do grupo
+- [x] `_fill_file` — resolve caminho, cria arquivo fake temporário se necessário
+- [x] `_write_minimal_pdf` — PDF mínimo válido (`%PDF-1.4`, parseável)
+- [x] `_write_minimal_image` — PNG mínimo válido (1x1 pixel, magic bytes corretos)
+- [x] Suporte a `frame_locator` (iframe-aware, mesma abstração do DOMCrawler)
+- [x] `take_screenshot` — salva screenshot em `/tmp` com nome parametrizável
+- [x] `FillError` — exceção recuperável para falhas individuais de campo
+
+**NavigationOrchestrator** (`infrastructure/browser/navigator.py`)
+- [x] Loop multi-página com limite de segurança (`max_pages=15`)
+- [x] Pipeline por página: crawl → classify → generate → fill → screenshot → next
+- [x] `_click_next` — lista priorizada de 13 seletores comuns para botões de avanço
+- [x] `_is_success_page` — detecta 10 indicadores de conclusão (PT + EN)
+- [x] `StepReport` — relatório por etapa: campos encontrados, preenchidos, falhas, screenshot
+- [x] `RunReport` — resultado final com `NavigationResult` enum e histórico de steps
+- [x] `run_portal()` — função de conveniência para uso direto
+- [x] Callback `on_page_done` para integração com CLI/UI
+- [x] Integração com `FormStatus` na session
+
+**Testes** (`tests/test_filler_navigator.py`)
+- [x] 12 testes unitários — FormFiller (text, email, select, checkbox, file, error cases)
+- [x] Validação dos geradores de PDF e PNG fake
+- [x] 2 testes de integração leve do NavigationOrchestrator (success + no-next-button)
 
 ---
 
 ## Fase 4 — Generalização e Robustez ⏳ PENDENTE
 
-**Estimativa:** 2–3 dias úteis | **Previsão:** Dias 6–8
+**Estimativa:** 2–3 dias úteis | **Previsão:** Dias 5–7
 
 ### Atividades
 
 - [ ] Refinamento heurístico — reduzir dependência de labels exatos
 - [ ] Redução de dependência específica por portal
-- [ ] Tratamento de erros — retry, fallback, logging estruturado
+- [ ] Tratamento de erros — retry automático, backoff, logging estruturado completo
 - [ ] Validação em terceiro portal inédito
 
 ### Entrega esperada
 
 > Agente adaptável para portal nunca visto antes.
+
+### Próximos passos concretos (início da Fase 4)
+
+1. **Retry layer** — decorator `@with_retry(max=3, backoff=1.5)` para `_fill_field` e `_click_next`
+2. **Heurística de label fuzzy** — se `SemanticType.UNKNOWN`, usar similaridade de string no label para inferir tipo
+3. **Anti-bot stealth** — user-agent rotativo, mouse movement simulado, delays aleatórios
+4. **Portal 3** — executar contra portal inédito e documentar falhas/adaptações necessárias
 
 ---
 
@@ -117,14 +121,14 @@
 
 | Risco | Status | Mitigação atual |
 |---|---|---|
-| iframes complexos | ✅ Resolvido | `frame_locator` automático no crawler |
+| iframes complexos | ✅ Resolvido | `frame_locator` automático no crawler e no filler |
 | Validação de domínio de e-mail | ✅ Resolvido | `company_email()` nos formatters |
+| Upload com validação server-side | ✅ Parcial | PDF/PNG mínimos válidos — pode falhar em validação de conteúdo |
 | Captcha | ⚠️ Não encontrado ainda | Monitorar — pausa manual se aparecer |
 | MFA / autenticação externa | ⚠️ Não encontrado ainda | A avaliar |
-| Componentes altamente dinâmicos | 🔄 Parcial | Screenshot + slow_mo para debug |
-| Bloqueios anti-bot | 🔄 Parcial | User-agent padrão do Playwright |
-| Upload com validação server-side | ⏳ Pendente | Fase 3 |
-| Validação documental real | ⏳ Pendente | Fase 3 |
+| Componentes altamente dinâmicos | 🔄 Parcial | Screenshot + slow_mo + 13 seletores de next button |
+| Bloqueios anti-bot | 🔄 Parcial | Fase 4 — stealth mode |
+| Validação documental real | ⏳ Pendente | Fase 4 |
 
 ---
 

@@ -1,6 +1,12 @@
 from __future__ import annotations
 from enum import Enum
+from typing import Any
 from pydantic import BaseModel, Field
+
+class FormStatus(str, Enum):
+    PENDING   = "pending"
+    COMPLETED = "completed"
+    ERROR     = "error"
 
 class FieldType(str, Enum):
     TEXT     = "text"
@@ -36,6 +42,8 @@ class SemanticType(str, Enum):
     CONTA             = "conta_bancaria"
     TEXTO_LIVRE       = "texto_livre"
     ACEITE_TERMOS     = "aceite_termos"
+    DOCUMENTO_PDF     = "documento_pdf"
+    DESCONHECIDO      = "desconhecido"
     UNKNOWN           = "unknown"
 
 class FormField(BaseModel):
@@ -61,20 +69,22 @@ class FormField(BaseModel):
         return " | ".join(parts)
     
 class FormPage(BaseModel):
-    number: int
+    page_number: int
     fields: list[FormField] = Field(default_factory=list)
     is_complete: bool = False
 
 class FormSession(BaseModel):
-    portal: str
-    url: str
+    portal: str = ""
+    url: str = ""
     pages: list[FormPage] = Field(default_factory=list)
     current_page: int = 1
     screenshots: list[str] = Field(default_factory=list)
+    filled_values: dict[str, Any] = Field(default_factory=dict)
+    status: FormStatus = FormStatus.PENDING
 
     def current(self) -> FormPage | None:
         for page in self.pages:
-            if page.number == self.current_page:
+            if page.page_number == self.current_page:
                 return page
         return None
 
