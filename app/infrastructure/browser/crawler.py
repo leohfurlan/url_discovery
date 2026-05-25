@@ -32,6 +32,8 @@ class DOMCrawler:
         for i in range(count):
             el = locator.nth(i)
             try:
+                if not await el.is_visible():
+                    continue
                 attrs = await el.evaluate(
                     r"""el => {
                         // Resolve label text via aria-labelledby (suporta múltiplos IDs separados por espaço)

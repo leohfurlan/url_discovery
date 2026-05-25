@@ -204,12 +204,17 @@ class PortalDiscovery:
         Clica no elemento e retorna a nova Page se uma nova aba for aberta,
         ou None se a navegação ocorreu na aba atual.
         """
+        pages_before = list(self._page.context.pages)
         try:
             async with self._page.context.expect_page(timeout=_NEW_TAB_TIMEOUT) as page_info:
                 await locator.click()
             return await page_info.value
         except Exception:
-            # Nenhuma nova aba — clique causou navegação na aba atual (ou nada)
+            # Fallback: verifica se uma nova aba foi aberta após o timeout
+            pages_after = self._page.context.pages
+            new_pages = [p for p in pages_after if p not in pages_before]
+            if new_pages:
+                return new_pages[-1]
             return None
 
     async def _wait_for_load(self, page: Page) -> None:

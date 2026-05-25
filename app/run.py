@@ -78,9 +78,8 @@ def main(
         )
         _print_report(report, portal)
         raise typer.Exit(code=0 if report.result.name == "SUCCESS" else 1)
-    except KeyboardInterrupt:
-        typer.echo("\nInterrompido pelo usuário.", err=True)
-        raise typer.Exit(code=130)
+    except (KeyboardInterrupt, typer.Exit):
+        raise
     except Exception as exc:
         typer.echo(f"\nErro fatal: {exc}", err=True)
         raise typer.Exit(code=1)

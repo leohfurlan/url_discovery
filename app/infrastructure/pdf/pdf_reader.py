@@ -1,5 +1,5 @@
 from __future__ import annotations
-import base64
+import concurrent.futures
 import structlog
 from pathlib import Path
 from domain.entities.company_profile import DocumentType
@@ -41,7 +41,7 @@ def extract_text(
     """Extrai texto de um PDF.
 
     Tenta pdfplumber primeiro. Se o resultado for muito curto e api_key estiver
-    disponível, usa OCR via Gemini Vision (necessário para PDFs escaneados).
+    disponível, usa OCR via Gemma Vision (necessário para PDFs escaneados).
     """
     text = _extract_pdfplumber(path)
     if len(text) >= _MIN_TEXT_CHARS:
@@ -55,7 +55,7 @@ def extract_text(
         "pdf_texto_insuficiente",
         arquivo=path.name,
         chars=len(text),
-        dica="PDF parece escaneado — forneça api_key para habilitar OCR via Gemini Vision",
+        dica="PDF parece escaneado — forneça api_key para habilitar OCR via Gemma Vision",
     )
     return text
 
@@ -100,19 +100,49 @@ def _extract_pdfplumber(path: Path) -> str:
     return "\n".join(pages_text).strip()[:_MAX_TEXT_CHARS]
 
 
-_OCR_DPI_SCALE = 150 / 72   # 150 DPI — boa qualidade para documentos impressos
-_OCR_MAX_PAGES = 10          # evita enviar PDFs muito longos ao modelo
+_OCR_DPI_SCALE  = 300 / 72   # 300 DPI — recomendado pelo Gemma para documentos
+_OCR_MAX_PAGES  = 10          # limite por chamada
+_OCR_TIMEOUT_S  = 300         # segundos — Gemma leva ~2 min por chamada com 6 páginas PNG 300 DPI
+
+_OCR_SYSTEM = (
+    "You are a high-precision Document OCR Engine specialized in Brazilian "
+    "commercial and financial documents (Receita Federal, Junta Comercial, banks)."
+)
+
+_OCR_PROMPT = """\
+[TASK]
+Analyze the provided sequence of images. These images represent all pages of a single document.
+1. Synthesize information across all pages (e.g., a name on page 1 may relate to a signature on page 6).
+2. Extract ALL visible text from the document, preserving the original structure.
+3. If a field is not found, skip it.
+4. For dates, use DD/MM/YYYY format.
+
+[CONSTRAINTS]
+- DO NOT provide any conversational text, preamble, or markdown formatting (no ```).
+- Return ONLY the raw extracted text, exactly as it appears in the document."""
 
 
 def _extract_ocr(path: Path, api_key: str, ocr_model: str) -> str:
-    """Converte cada página do PDF em PNG via pymupdf e envia ao Gemma Vision para OCR.
+    """Wrapper com timeout para nunca ficar pendurado independentemente de falha de rede."""
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+        future = ex.submit(_do_ocr, path, api_key, ocr_model)
+        try:
+            return future.result(timeout=_OCR_TIMEOUT_S)
+        except concurrent.futures.TimeoutError:
+            logger.warning("ocr_timeout", arquivo=path.name, timeout_s=_OCR_TIMEOUT_S)
+            return ""
 
-    Usar imagens (image/png) em vez do PDF bruto (application/pdf) é mais
-    confiável porque todos os modelos de visão aceitam imagens, independente
-    de suportarem ou não PDF como tipo de entrada direto.
+
+def _do_ocr(path: Path, api_key: str, ocr_model: str) -> str:
+    """Converte páginas em PNG via pymupdf e envia ao Gemma via google-genai SDK.
+
+    Usa GenerateContentConfig com system_instruction, temperature=0.01 e top_p=0.1
+    conforme recomendado pelo Gemma para extração determinística de documentos.
+    DPI 300 garante legibilidade de selos, carimbos e texto pequeno em documentos oficiais.
     """
-    import fitz  # pymupdf
-    from google import genai as google_genai
+    import fitz
+    from google import genai
+    from google.genai import types
 
     try:
         doc = fitz.open(str(path))
@@ -122,18 +152,21 @@ def _extract_ocr(path: Path, api_key: str, ocr_model: str) -> str:
         contents: list = []
         for i in range(n_pages):
             pix = doc[i].get_pixmap(matrix=mat)
-            img_b64 = base64.b64encode(pix.tobytes("png")).decode("utf-8")
-            contents.append({
-                "inline_data": {"mime_type": "image/png", "data": img_b64}
-            })
+            contents.append(types.Part.from_bytes(data=pix.tobytes("png"), mime_type="image/png"))
         doc.close()
 
-        contents.append(
-            "Extraia todo o texto deste documento. Retorne apenas o texto puro, sem formatação adicional."
-        )
+        contents.append(_OCR_PROMPT)
 
-        client = google_genai.Client(api_key=api_key)
-        response = client.models.generate_content(model=ocr_model, contents=contents)
+        client = genai.Client(api_key=api_key)
+        response = client.models.generate_content(
+            model=ocr_model,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                system_instruction=_OCR_SYSTEM,
+                temperature=0.01,
+                top_p=0.1,
+            ),
+        )
         text = (response.text or "").strip()
         logger.info("ocr_concluido", arquivo=path.name, chars=len(text), modelo=ocr_model, paginas=n_pages)
         return text[:_MAX_TEXT_CHARS]

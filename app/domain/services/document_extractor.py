@@ -40,11 +40,12 @@ _FIELD_MAP: dict[DocumentType, dict[str, str]] = {
         "objeto_social":        "objeto_social",
     },
     DocumentType.DEMONSTRACOES_FINANCEIRAS: {
-        "banco":             "banco",
-        "agencia":           "agencia",
-        "conta":             "conta",
-        "favorecido":        "favorecido",
-        "faturamento_anual": "faturamento_anual",
+        "banco":               "banco",
+        "agencia":             "agencia",
+        "conta":               "conta",
+        "favorecido":          "favorecido",
+        "faturamento_anual":   "faturamento_anual",
+        "periodo_referencia":  "periodo_referencia",
     },
 }
 

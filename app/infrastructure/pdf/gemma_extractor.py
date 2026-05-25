@@ -50,16 +50,17 @@ Campos:
 Texto do documento:
 {text}""",
 
-    DocumentType.DEMONSTRACOES_FINANCEIRAS: """Você está analisando uma Demonstração Financeira brasileira (DRE, Balanço Patrimonial ou similar).
-Extraia as informações bancárias para recebimento e retorne SOMENTE um JSON válido, sem markdown, sem explicação.
+    DocumentType.DEMONSTRACOES_FINANCEIRAS: """Você está analisando um documento financeiro brasileiro (Extrato Bancário, DRE, Balanço Patrimonial ou similar).
+Extraia as informações bancárias para recebimento e retorne SOMENTE um objeto JSON (não array), sem markdown, sem explicação.
 Se um campo não existir no documento, use null.
 
 Campos:
-- banco: string (nome do banco para recebimento/pagamento)
-- agencia: string (número da agência)
-- conta: string (número da conta com dígito verificador)
-- favorecido: string (nome do favorecido/titular da conta)
-- faturamento_anual: string (receita bruta ou faturamento anual formatado em R$, se houver)
+- banco: string (nome do banco, ex: "Nubank", "Bradesco", "Itaú", "Banco do Brasil", "Caixa")
+- agencia: string (número da agência bancária, ex: "0001")
+- conta: string (número completo da conta com dígito verificador, ex: "224776546-5")
+- favorecido: string (nome completo do titular da conta)
+- faturamento_anual: string (total de entradas no período ou faturamento anual em R$, ex: "R$ 24.218,40")
+- periodo_referencia: string (período de referência do documento, ex: "27/03/2026 a 25/05/2026" ou "2024")
 
 Texto do documento:
 {text}""",
@@ -106,7 +107,7 @@ def extract_fields(
         logger.info("extracao_concluida", tipo=doc_type.value, campos_extraidos=len([v for v in result.values() if v]))
         return result
     except (json.JSONDecodeError, ValueError) as exc:
-        logger.warning("extracao_json_invalido", tipo=doc_type.value, erro=str(exc))
+        logger.warning("extracao_json_invalido", tipo=doc_type.value, erro=str(exc), raw=raw[:300])
         return {}
     except Exception as exc:
         logger.error("extracao_falhou", tipo=doc_type.value, erro=str(exc))
