@@ -12,6 +12,10 @@ venv/
 env/
 ENV/
 
+# Documentos reais da empresa (confidencial — nunca subir para o repositório)
+docs/*
+!docs/.gitkeep
+
 # Variaveis de ambiente e segredos locais
 .env
 .env.*
@@ -68,3 +72,5 @@ diag_*
 .DS_Store
 Thumbs.db
 desktop.ini
+=1.24
+docs/.gitkeep

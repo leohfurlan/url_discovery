@@ -1,3 +1,24 @@
+"""
+classifier.py — Classificação semântica de campos de formulário em dois estágios.
+
+Estágio 1 — Heurística (classify_by_heuristic):
+    Correspondência de substrings contra HEURISTIC_RULES. Rápido, sem custo de API,
+    cobre a maioria dos campos brasileiros comuns (CNPJ, CPF, e-mail, CEP...).
+
+Estágio 2 — LLM via Gemini (classify_by_llm):
+    Acionado apenas quando a heurística retorna UNKNOWN. Envia o semantic_hint do
+    campo ao modelo Gemma e interpreta a resposta como um SemanticType.
+    Requer GEMINI_API_KEY; retorna UNKNOWN se a chave não estiver configurada.
+
+Ponto de entrada público: classify(field) — encadeia os dois estágios.
+
+Relação com gemma_adapter.py:
+    GemmaClassifier (infrastructure/llm/gemma_adapter.py) implementa ClassifierPort
+    usando o mesmo modelo Gemini, mas recebe uma lista de campos por página e é
+    usado pelo NavigationOrchestrator. Este módulo é funcional (sem estado) e pode
+    ser importado diretamente em contextos mais simples ou em testes unitários.
+"""
+
 from __future__ import annotations
 from domain.entities.form import FormField, SemanticType
 import os
@@ -75,6 +96,15 @@ HEURISTIC_RULES: list[tuple[SemanticType, list[str]]] = [
     (SemanticType.ACEITE_TERMOS, [
         "termos", "aceito", "concordo", "política", "lgpd",
     ]),
+    (SemanticType.FAVORECIDO, [
+        "favorecido", "titular da conta", "beneficiário", "beneficiario",
+    ]),
+    (SemanticType.NOME_SOCIO, [
+        "nome do sócio", "nome do socio", "sócio", "socio", "representante legal",
+    ]),
+    (SemanticType.CPF_SOCIO, [
+        "cpf do sócio", "cpf do socio", "cpf do representante", "cpf do responsável",
+    ]),
 ]
 
 
@@ -83,6 +113,10 @@ def _normalize(text: str) -> str:
 
 
 def classify_by_heuristic(field: FormField) -> SemanticType:
+    """Classifica o campo por correspondência de substrings contra HEURISTIC_RULES.
+
+    Retorna UNKNOWN quando nenhuma keyword bate — sinal para acionar o LLM.
+    """
     hint = _normalize(field.semantic_hint)
     if not hint:
         return SemanticType.UNKNOWN
@@ -97,9 +131,14 @@ def classify_by_heuristic(field: FormField) -> SemanticType:
 
 _SEMANTIC_TYPES = [t.value for t in SemanticType if t != SemanticType.UNKNOWN]
 
-# DEFININDO A CLASSIFICAÇÃO POR LLM (GEMMA 4.0 26B A4B) COMO BACKUP PARA CASOS NÃO CLAROS PELA HEURÍSTICA
 
 def classify_by_llm(field: FormField) -> SemanticType:
+    """Classifica o campo via Gemini quando a heurística não foi suficiente.
+
+    Envia o semantic_hint ao modelo e converte a resposta em SemanticType.
+    Retorna UNKNOWN se a GEMINI_API_KEY não estiver definida ou se o modelo
+    responder com um valor fora do enum.
+    """
     hint = field.semantic_hint
     if not hint:
         return SemanticType.UNKNOWN
@@ -132,6 +171,7 @@ Hint do campo: {hint}"""
 
 
 def classify(field: FormField) -> SemanticType:
+    """Ponto de entrada principal: heurística primeiro, LLM como fallback."""
     result = classify_by_heuristic(field)
     if result != SemanticType.UNKNOWN:
         return result

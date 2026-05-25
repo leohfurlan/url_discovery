@@ -1,7 +1,7 @@
 # TODO — Agente de Automação de Formulários
 
-> Última atualização: Dia 6
-> Status geral: **Fase 4 EM ANDAMENTO** — 3 de 4 fases concluídas + avanço significativo na Fase 4
+> Última atualização: Dia 7 (2026-05-25)
+> Status geral: **Fase 4 EM ANDAMENTO** — 3 de 4 fases concluídas + módulo de importação de dados reais implementado
 
 ---
 
@@ -130,6 +130,32 @@
   - 6/6 campos preenchidos com semântica correta
   - Resultado: `SUBMIT_BLOCKED` — formulário pronto para envio, Submit não clicado
 
+### Concluído no Dia 7 (2026-05-25)
+
+- [x] **Módulo de importação de dados reais via PDF** — substitui Faker pelos dados reais da empresa
+  - `domain/entities/company_profile.py` — `CompanyProfile` (Pydantic) + `DocumentType` enum
+  - `infrastructure/pdf/pdf_reader.py` — extração de texto com pdfplumber + detecção de tipo por palavras-chave
+  - `infrastructure/pdf/gemma_extractor.py` — extração estruturada JSON via Gemma (mesmo client/modelo do projeto)
+  - `domain/services/document_extractor.py` — `DocumentExtractor`: varre diretório, mescla perfis por prioridade
+  - `domain/entities/form.py` — novos `SemanticType`: `FAVORECIDO`, `NOME_SOCIO`, `CPF_SOCIO`
+  - `domain/services/generator.py` — `DataGenerator` aceita `CompanyProfile` opcional; fallback fake preservado
+  - `domain/services/classifier.py` — heurísticas para os 3 novos tipos semânticos
+  - `app/run.py` — parâmetro `--docs-dir <path>` para informar pasta com os PDFs
+  - `pyproject.toml` — dependência `pdfplumber>=0.11`
+
+**Documentos suportados:**
+
+| Documento | Campos extraídos |
+|---|---|
+| Cartão CNPJ (Receita Federal) | CNPJ, Razão Social, Nome Fantasia, CNAE, Endereço, CEP, Cidade, UF, Telefone, IE, IM |
+| Contrato Social / Alteração | Sócio principal, CPF do sócio, Objeto Social |
+| Demonstrações Financeiras | Banco, Agência, Conta, Favorecido, Faturamento anual |
+
+**Uso:**
+```powershell
+python app\run.py "https://portal.example.com" empresa --docs-dir ./docs --no-submit
+```
+
 ### Pendente
 
 - [ ] **Refinar extração de label Microsoft Forms** — usar `querySelector('span:nth-child(2)')` dentro do `QuestionId_...` para capturar título puro, sem número prefixado (`"1."`) e sem helper text do `QuestionInfo_...` (padrão XPath identificado: `//*[@id="QuestionId_r..."]/div[1]/span/span[1]/span[2]`)
@@ -137,6 +163,7 @@
 - [ ] Retry layer — decorator `@with_retry(max=3, backoff=1.5)` para `_fill_field` e `_click_next`
 - [ ] Anti-bot stealth — user-agent rotativo, mouse movement simulado, delays aleatórios
 - [ ] Tratamento de CAPTCHA — pausa e notificação quando detectado
+- [ ] Testes unitários para `DocumentExtractor`, `pdf_reader` e `gemma_extractor`
 
 ### Entrega esperada
 

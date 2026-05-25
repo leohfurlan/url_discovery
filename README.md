@@ -17,6 +17,14 @@ Agente Python que acessa portais de fornecedores, descobre o formulário de cada
 O agente recebe a **URL pública do portal** (não o link direto do formulário). O pipeline é:
 
 ```
+[opcional] Cartão CNPJ + Contrato Social + Demonstrações Financeiras (PDF)
+  │
+  ▼
+DocumentExtractor        Lê PDFs via pdfplumber, detecta o tipo de documento e envia
+  │                      o texto ao Gemma para extração estruturada em JSON.
+  │                      Resultado: CompanyProfile com dados reais da empresa.
+  │                      (Se omitido, DataGenerator usa Faker como antes.)
+  ▼
 URL do portal
   │
   ▼
@@ -26,11 +34,11 @@ PortalDiscovery          Detecta iframe embutido, link ou botão que leva ao for
 DOMCrawler               Extrai campos do DOM (input, select, textarea, labels, opções).
   │                      Suporta iframes — Microsoft Forms é sempre servido em iframe.
   ▼
-GemmaClassifier          Classifica cada campo semanticamente via Gemini API
+GemmaClassifier          Classifica cada campo semanticamente via Gemma
   │                      (CNPJ, Razão Social, E-mail corporativo, Estado, etc.)
   ▼
-DataGenerator            Gera valores coerentes entre si:
-  │                      e-mail corporativo usa o mesmo domínio da razão social gerada.
+DataGenerator            Usa dados reais do CompanyProfile quando disponíveis;
+  │                      fallback automático para Faker em campos não extraídos.
   ▼
 FormFiller               Preenche cada campo com o valor gerado.
   │                      Estratégias por tipo: text, email, select, checkbox, radio, file.
@@ -93,8 +101,31 @@ python app\run.py --help
 | `--max-pages` | `15` | Limite de páginas do formulário |
 | `--iframe` | auto | Seletor CSS do iframe, se já conhecido |
 | `--screenshots` | `/tmp` | Diretório para salvar screenshots |
-| `--model` | `gemma-4-26b-a4b-it` | Modelo Gemini para classificação |
+| `--model` | `gemma-4-26b-a4b-it` | Modelo Gemma para classificação e extração de documentos |
+| `--docs-dir` | — | Diretório com PDFs reais da empresa (ver abaixo) |
 | `--submit` / `--no-submit` | env | Sobrescreve `ALLOW_FORM_SUBMIT` do `.env` |
+
+### Usando dados reais da empresa
+
+Coloque os PDFs em uma pasta (qualquer nome de arquivo) e informe com `--docs-dir`.
+O agente detecta automaticamente o tipo de cada documento:
+
+| Documento | Campos extraídos |
+|---|---|
+| Cartão CNPJ (Receita Federal) | CNPJ, Razão Social, Nome Fantasia, CNAE, Endereço, CEP, Cidade, UF, Telefone, IE, IM |
+| Contrato Social / Alteração | Sócio principal, CPF do sócio, Objeto Social |
+| Demonstrações Financeiras | Banco, Agência, Conta, Favorecido, Faturamento anual |
+
+```powershell
+# Cria pasta com os PDFs e executa com dados reais
+mkdir docs
+# (copie: cartao_cnpj.pdf, contrato_social.pdf, dre.pdf para docs/)
+python app\run.py "https://portal.example.com" empresa --docs-dir ./docs --no-submit
+```
+
+Campos não encontrados nos documentos são preenchidos automaticamente com dados fake — o fallback é transparente.
+
+> **PDFs escaneados (imagens):** o extrator precisa de PDFs com texto selecionável. PDFs gerados por scanner sem OCR não têm texto extraível e o agente usará Faker como fallback com um aviso no log.
 
 ### Exemplos com controle de submissão
 
@@ -152,10 +183,14 @@ python -m pytest app\tests -v
 app/
   run.py                          CLI — ponto de entrada principal
   domain/
-    entities/form.py              Modelos: FormField, FormPage, FormSession, SemanticType
+    entities/
+      form.py                     Modelos: FormField, FormPage, FormSession, SemanticType
+      company_profile.py          CompanyProfile — dados reais extraídos de PDFs
     services/
       classifier_port.py          Port (interface) do classificador semântico
-      generator.py                DataGenerator — gera dados fake coerentes
+      classifier.py               Classificação em 2 estágios: heurística → LLM fallback
+      generator.py                DataGenerator — dados reais (perfil) com fallback fake
+      document_extractor.py       DocumentExtractor — lê PDFs e monta CompanyProfile
   infrastructure/
     formaters.py                  Formatadores: CNPJ, CPF, telefone, CEP, e-mail corporativo
     browser/
@@ -164,7 +199,10 @@ app/
       filler.py                   FormFiller — preenche campos por tipo
       navigator.py                NavigationOrchestrator — fluxo multi-página
     llm/
-      gemma_adapter.py            GemmaClassifier — classifica campos via Gemini API
+      gemma_adapter.py            GemmaClassifier — classifica campos via Gemma
+    pdf/
+      pdf_reader.py               Extração de texto e detecção de tipo de documento
+      gemma_extractor.py          Extração estruturada de campos via Gemma (JSON)
   tests/                          Testes unitários e de integração
   portals/                        Documentação de portais analisados
 urls                              Lista de portais mapeados

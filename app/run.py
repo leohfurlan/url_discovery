@@ -51,7 +51,8 @@ def main(
     max_pages: int = typer.Option(15, "--max-pages", help="Limite de páginas do formulário"),
     iframe: str | None = typer.Option(None, "--iframe", help="Seletor CSS do iframe, se já conhecido (pula a discovery)"),
     screenshot_dir: str | None = typer.Option(None, "--screenshots", help="Diretório para salvar screenshots (padrão: /tmp)"),
-    model: str = typer.Option("gemma-4-26b-a4b-it", "--model", help="Modelo Gemini para classificação semântica"),
+    model: str = typer.Option("gemma-4-26b-a4b-it", "--model", help="Modelo Gemma para classificação semântica e extração de documentos"),
+    docs_dir: Path | None = typer.Option(None, "--docs-dir", help="Diretório com PDFs reais (Cartão CNPJ, Contrato Social, Demonstrações Financeiras)"),
     submit: bool = typer.Option(None, "--submit/--no-submit", help="Submete o formulário após preencher (sobrescreve ALLOW_FORM_SUBMIT do .env)"),
 ) -> None:
     """Descobre e preenche automaticamente o formulário de cadastro de fornecedor.
@@ -73,7 +74,7 @@ def main(
 
     try:
         report = asyncio.run(
-            _run(url, portal, headless, slow_fill, max_pages, iframe, screenshot_dir, model, allow_submit)
+            _run(url, portal, headless, slow_fill, max_pages, iframe, screenshot_dir, model, allow_submit, docs_dir)
         )
         _print_report(report, portal)
         raise typer.Exit(code=0 if report.result.name == "SUCCESS" else 1)
@@ -95,10 +96,12 @@ async def _run(
     screenshot_dir: str | None,
     model: str,
     allow_submit: bool,
+    docs_dir: Path | None = None,
 ):
     from playwright.async_api import async_playwright
     from infrastructure.llm.gemma_adapter import GemmaClassifier
     from domain.services.generator import DataGenerator
+    from domain.services.document_extractor import DocumentExtractor
     from infrastructure.browser.portal_discovery import PortalDiscovery
     from infrastructure.browser.navigator import NavigationOrchestrator
 
@@ -130,8 +133,23 @@ async def _run(
             active_iframe = iframe_selector
             typer.echo(f"→ Usando iframe informado: {active_iframe}")
 
+        profile = None
+        if docs_dir:
+            if not docs_dir.is_dir():
+                typer.echo(f"⚠  --docs-dir '{docs_dir}' não é um diretório válido — usando dados fake.", err=True)
+            else:
+                gemini_api_key = os.getenv("GEMINI_API_KEY")
+                typer.echo(f"→ Carregando documentos reais de: {docs_dir}")
+                extractor = DocumentExtractor(api_key=gemini_api_key, model=model)
+                profile = extractor.load_from_directory(docs_dir)
+                if profile.is_empty():
+                    typer.echo("⚠  Nenhum campo extraído dos PDFs — usando dados fake.")
+                    profile = None
+                else:
+                    typer.echo(f"→ Perfil carregado: {profile.razao_social or '—'} / CNPJ: {profile.cnpj or '—'}")
+
         classifier = GemmaClassifier(model=model)
-        generator = DataGenerator()
+        generator = DataGenerator(profile=profile)
 
         orchestrator = NavigationOrchestrator(
             page=active_page,

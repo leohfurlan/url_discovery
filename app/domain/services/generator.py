@@ -1,6 +1,7 @@
 from __future__ import annotations
 from faker import Faker
 from domain.entities.form import SemanticType
+from domain.entities.company_profile import CompanyProfile
 from infrastructure.formaters import (
     format_cnpj,
     format_cpf,
@@ -77,24 +78,51 @@ def generate(semantic_type: SemanticType) -> str:
         case SemanticType.TEXTO_LIVRE:
             return fake.sentence(nb_words=6)
 
+        case SemanticType.FAVORECIDO:
+            return fake.name()
+
+        case SemanticType.NOME_SOCIO:
+            return fake.name()
+
+        case SemanticType.CPF_SOCIO:
+            return format_cpf(fake.cpf())
+
         case _:
             return fake.word()
 
 
 class DataGenerator:
-    """Gerador com memória de sessão para manter coerência entre campos relacionados."""
+    """Gerador com memória de sessão para manter coerência entre campos relacionados.
 
-    def __init__(self) -> None:
+    Se um CompanyProfile for fornecido, usa os dados reais como fonte prioritária.
+    Campos ausentes no perfil (ou perfil não fornecido) caem no gerador fake.
+    """
+
+    def __init__(self, profile: CompanyProfile | None = None) -> None:
+        self._profile = profile
         self._company_name: str | None = None
+        # Pré-carrega nome da empresa do perfil real para o email corporativo
+        if profile and profile.razao_social:
+            self._company_name = profile.razao_social
 
     def generate(self, semantic_type: SemanticType) -> str:
-        value = self._produce(semantic_type)
+        # 1. Tenta dado real do perfil
+        if self._profile:
+            real = self._profile.get(semantic_type)
+            if real:
+                if semantic_type in (SemanticType.RAZAO_SOCIAL, SemanticType.NOME_FANTASIA):
+                    if self._company_name is None:
+                        self._company_name = real
+                return real
+
+        # 2. Fallback: dado fake com memória de sessão
+        value = self._produce_fake(semantic_type)
         if semantic_type in (SemanticType.RAZAO_SOCIAL, SemanticType.NOME_FANTASIA):
             if self._company_name is None:
                 self._company_name = value
         return value
 
-    def _produce(self, semantic_type: SemanticType) -> str:
+    def _produce_fake(self, semantic_type: SemanticType) -> str:
         if semantic_type == SemanticType.EMAIL_CORPORATIVO:
             company = self._company_name or fake.company()
             return company_email(company)
