@@ -1,4 +1,5 @@
 from __future__ import annotations
+import os
 from faker import Faker
 from domain.entities.form import SemanticType
 from domain.entities.company_profile import CompanyProfile
@@ -101,7 +102,7 @@ class DataGenerator:
     def __init__(self, profile: CompanyProfile | None = None) -> None:
         self._profile = profile
         self._company_name: str | None = None
-        # Pré-carrega nome da empresa do perfil real para o email corporativo
+        self._company_email: str | None = os.getenv("COMPANY_EMAIL")
         if profile and profile.razao_social:
             self._company_name = profile.razao_social
 
@@ -115,7 +116,12 @@ class DataGenerator:
                         self._company_name = real
                 return real
 
-        # 2. Fallback: dado fake com memória de sessão
+        # 2. Email real via COMPANY_EMAIL env var
+        if semantic_type in (SemanticType.EMAIL_GENERICO, SemanticType.EMAIL_CORPORATIVO):
+            if self._company_email:
+                return self._company_email
+
+        # 3. Fallback: dado fake com memória de sessão
         value = self._produce_fake(semantic_type)
         if semantic_type in (SemanticType.RAZAO_SOCIAL, SemanticType.NOME_FANTASIA):
             if self._company_name is None:

@@ -104,6 +104,24 @@ async def _run(
     from infrastructure.browser.portal_discovery import PortalDiscovery
     from infrastructure.browser.navigator import NavigationOrchestrator
 
+    # ── 1. Extração de documentos ANTES de abrir o browser ────────────────────
+    profile = None
+    if docs_dir:
+        if not docs_dir.is_dir():
+            typer.echo(f"⚠  --docs-dir '{docs_dir}' não é um diretório válido — usando dados fake.", err=True)
+        else:
+            gemini_api_key = os.getenv("GEMINI_API_KEY")
+            typer.echo(f"→ Carregando documentos reais de: {docs_dir}")
+            extractor = DocumentExtractor(api_key=gemini_api_key, model=model)
+            profile = extractor.load_from_directory(docs_dir)
+            if profile.is_empty():
+                typer.echo("⚠  Nenhum campo extraído dos PDFs — usando dados fake.")
+                profile = None
+            else:
+                typer.echo(f"→ Perfil carregado: {profile.razao_social or '—'} / CNPJ: {profile.cnpj or '—'}")
+                _check_minimum_fields(profile)
+
+    # ── 2. Navegação e preenchimento ──────────────────────────────────────────
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=headless)
         context = await browser.new_context(
@@ -132,21 +150,6 @@ async def _run(
             active_iframe = iframe_selector
             typer.echo(f"→ Usando iframe informado: {active_iframe}")
 
-        profile = None
-        if docs_dir:
-            if not docs_dir.is_dir():
-                typer.echo(f"⚠  --docs-dir '{docs_dir}' não é um diretório válido — usando dados fake.", err=True)
-            else:
-                gemini_api_key = os.getenv("GEMINI_API_KEY")
-                typer.echo(f"→ Carregando documentos reais de: {docs_dir}")
-                extractor = DocumentExtractor(api_key=gemini_api_key, model=model)
-                profile = extractor.load_from_directory(docs_dir)
-                if profile.is_empty():
-                    typer.echo("⚠  Nenhum campo extraído dos PDFs — usando dados fake.")
-                    profile = None
-                else:
-                    typer.echo(f"→ Perfil carregado: {profile.razao_social or '—'} / CNPJ: {profile.cnpj or '—'}")
-
         classifier = GemmaClassifier(model=model)
         generator = DataGenerator(profile=profile)
 
@@ -165,6 +168,28 @@ async def _run(
         report = await orchestrator.run(portal_name=portal)
         await browser.close()
         return report
+
+
+def _check_minimum_fields(profile) -> None:
+    """Avisa sobre campos críticos ausentes antes de iniciar o browser."""
+    critical = {"cnpj": profile.cnpj, "razao_social": profile.razao_social}
+    banking  = {"banco": profile.banco, "agencia": profile.agencia, "conta": profile.conta}
+
+    missing_critical = [k for k, v in critical.items() if not v]
+    missing_banking  = [k for k, v in banking.items() if not v]
+
+    if missing_critical:
+        typer.echo(
+            f"⚠  Campos críticos ausentes: {', '.join(missing_critical)}"
+            " — esses campos usarão dados fake.", err=True
+        )
+    if missing_banking:
+        typer.echo(
+            f"ℹ  Dados bancários incompletos: {', '.join(missing_banking)}"
+            " — campos de pagamento usarão dados fake."
+        )
+    if not missing_critical and not missing_banking:
+        typer.echo("✓  Todos os campos essenciais extraídos dos documentos.")
 
 
 def _print_report(report, portal: str) -> None:

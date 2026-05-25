@@ -64,6 +64,11 @@ GEMINI_API_KEY=sua_chave_aqui
 # false = preenche e para antes do Submit (padrão/seguro para testes)
 # true  = submete o formulário (somente em produção autorizada)
 ALLOW_FORM_SUBMIT=false
+
+# Email real da empresa — usado em campos de e-mail dos formulários.
+# O Cartão CNPJ da Receita Federal não contém e-mail; defina aqui para
+# que formulários recebam o e-mail real da empresa (opcional).
+COMPANY_EMAIL=seu_email@empresa.com.br
 ```
 
 ## Como executar
@@ -102,30 +107,43 @@ python app\run.py --help
 | `--iframe` | auto | Seletor CSS do iframe, se já conhecido |
 | `--screenshots` | `/tmp` | Diretório para salvar screenshots |
 | `--model` | `gemma-4-26b-a4b-it` | Modelo Gemma para classificação e extração de documentos |
-| `--docs-dir` | — | Diretório com PDFs reais da empresa (ver abaixo) |
+| `--docs-dir` | — | Diretório com PDFs reais da empresa — extrai antes de abrir o browser |
 | `--submit` / `--no-submit` | env | Sobrescreve `ALLOW_FORM_SUBMIT` do `.env` |
 
 ### Usando dados reais da empresa
 
-Coloque os PDFs em uma pasta (qualquer nome de arquivo) e informe com `--docs-dir`.
+Coloque os PDFs em `docs/` (pasta ignorada pelo git) e execute com `--docs-dir`:
+
+```powershell
+python app\run.py "https://portal.example.com" empresa --docs-dir ./docs --no-submit
+```
+
 O agente detecta automaticamente o tipo de cada documento:
 
 | Documento | Campos extraídos |
 |---|---|
-| Cartão CNPJ (Receita Federal) | CNPJ, Razão Social, Nome Fantasia, CNAE, Endereço, CEP, Cidade, UF, Telefone, IE, IM |
+| Cartão CNPJ (Receita Federal) | CNPJ, Razão Social, Nome Fantasia, CNAE, Endereço, CEP, Cidade, UF, Telefone, E-mail |
 | Contrato Social / Alteração | Sócio principal, CPF do sócio, Objeto Social |
-| Demonstrações Financeiras | Banco, Agência, Conta, Favorecido, Faturamento anual |
+| Demonstrações Financeiras / Extrato | Banco, Agência, Conta, Favorecido, Faturamento, Período |
 
-```powershell
-# Cria pasta com os PDFs e executa com dados reais
-mkdir docs
-# (copie: cartao_cnpj.pdf, contrato_social.pdf, dre.pdf para docs/)
-python app\run.py "https://portal.example.com" empresa --docs-dir ./docs --no-submit
+**Fluxo com `--docs-dir`:**
+
+1. Documentos são extraídos **antes** de abrir o browser (~3 min com OCR)
+2. Campos críticos (`cnpj`, `razao_social`) e dados bancários são validados com aviso
+3. Browser abre já com o perfil montado — preenchimento usa dados reais
+
+```
+→ Carregando documentos reais de: docs
+→ Perfil carregado: EMPRESA LTDA / CNPJ: 00.000.000/0001-00
+✓  Todos os campos essenciais extraídos dos documentos.
+→ Abrindo portal: ...
 ```
 
-Campos não encontrados nos documentos são preenchidos automaticamente com dados fake — o fallback é transparente.
+**PDFs escaneados (sem texto):** suportados via OCR automático com `gemma-4-26b-a4b-it` Vision. O modelo recebe as páginas renderizadas em PNG a 300 DPI. Tempo médio: ~2 min por documento escaneado.
 
-> **PDFs escaneados (imagens):** o extrator precisa de PDFs com texto selecionável. PDFs gerados por scanner sem OCR não têm texto extraível e o agente usará Faker como fallback com um aviso no log.
+**E-mail de contato:** extraído do campo "ENDEREÇO ELETRÔNICO" do Cartão CNPJ. Caso o documento não contenha esse campo, defina `COMPANY_EMAIL` no `.env` como fallback.
+
+**Fallback automático:** campos ausentes nos documentos são preenchidos com Faker — transparente, sem erro.
 
 ### Exemplos com controle de submissão
 
@@ -169,6 +187,30 @@ E o relatório final mostra `Resultado: SUBMIT_BLOCKED` — indicando que o form
    ```
 
 > **Atenção:** antes de habilitar, valide o screenshot gerado (`--screenshots`) para confirmar que os dados estão corretos para o portal específico. O classificador semântico nem sempre acerta 100% dos campos.
+
+### Validar extração antes de rodar
+
+Para inspecionar quais campos foram extraídos dos PDFs sem abrir o browser:
+
+```powershell
+python app\validate_docs.py
+```
+
+Saída esperada com os 3 documentos configurados:
+
+```
+============================================================
+  COMPANY PROFILE EXTRAIDO
+============================================================
+  [OK]   CNPJ                   00.000.000/0001-00
+  [OK]   Razao Social           EMPRESA LTDA
+  [OK]   Banco                  Nubank
+  [OK]   Agencia                0001
+  [OK]   Conta                  000000000-0
+  ...
+  Campos preenchidos: 17/20
+============================================================
+```
 
 ## Como executar os testes
 
@@ -218,3 +260,19 @@ urls                              Lista de portais mapeados
 Hexagonal simplificada: `domain/` não depende de nada externo. `infrastructure/` implementa os ports. `run.py` orquestra tudo.
 
 O classificador (`GemmaClassifier`) é trocável — qualquer implementação de `ClassifierPort` funciona. Se a `GEMINI_API_KEY` não estiver configurada, todos os campos são classificados como `UNKNOWN` e o gerador usa valores genéricos.
+
+### Prioridade de resolução de valores
+
+Para cada campo do formulário, o `DataGenerator` aplica esta ordem:
+
+1. **Dado real dos PDFs** — campo correspondente no `CompanyProfile`
+2. **`COMPANY_EMAIL`** (apenas campos de e-mail) — variável do `.env`, usado quando o Cartão CNPJ não contém "ENDEREÇO ELETRÔNICO"
+3. **Faker** — geração automática como fallback final
+
+Variáveis de ambiente relevantes:
+
+| Variável | Obrigatória | Descrição |
+|---|---|---|
+| `GEMINI_API_KEY` | Sim | Chave da API Google AI (Gemma) |
+| `ALLOW_FORM_SUBMIT` | Não | `true` para submeter formulários (padrão: `false`) |
+| `COMPANY_EMAIL` | Não | E-mail real da empresa para campos de contato |

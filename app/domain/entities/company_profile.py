@@ -31,6 +31,8 @@ _SEMANTIC_TO_FIELD: dict[str, str] = {
     "favorecido":          "favorecido",
     "nome_socio":          "nome_socio_principal",
     "cpf_socio":           "cpf_socio_principal",
+    "email_generico":      "email",
+    "email_corporativo":   "email",
 }
 
 
@@ -45,6 +47,7 @@ class CompanyProfile(BaseModel):
     cidade:              str | None = None
     estado:              str | None = None   # UF (2 letras)
     telefone:            str | None = None
+    email:               str | None = None   # email de contato da empresa
     inscricao_estadual:  str | None = None
     inscricao_municipal: str | None = None
 

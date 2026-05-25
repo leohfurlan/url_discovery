@@ -30,6 +30,7 @@ Campos:
 - cidade: string
 - estado: string (sigla da UF, 2 letras maiúsculas)
 - telefone: string
+- email: string (campo "ENDEREÇO ELETRÔNICO" do cartão CNPJ)
 - inscricao_estadual: string
 - inscricao_municipal: string
 

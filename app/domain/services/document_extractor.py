@@ -29,6 +29,7 @@ _FIELD_MAP: dict[DocumentType, dict[str, str]] = {
         "cidade":              "cidade",
         "estado":              "estado",
         "telefone":            "telefone",
+        "email":               "email",
         "inscricao_estadual":  "inscricao_estadual",
         "inscricao_municipal": "inscricao_municipal",
     },
