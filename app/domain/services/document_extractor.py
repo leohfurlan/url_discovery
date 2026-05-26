@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import structlog
@@ -96,11 +97,15 @@ class DocumentExtractor:
         self._model = model
         self._ocr_model = ocr_model
 
-    def load_from_directory(self, docs_dir: Path, use_cache: bool = True) -> CompanyProfile:
+    async def load_from_directory(self, docs_dir: Path, use_cache: bool = True) -> CompanyProfile:
         """Processa todos os PDFs do diretório e mescla em um único CompanyProfile.
 
         Campos do Cartão CNPJ têm prioridade; seguidos pelo Contrato Social
         e pelas Demonstrações Financeiras.
+
+        Os PDFs são processados em paralelo (asyncio.to_thread) — útil
+        especialmente quando algum precisa de OCR via Gemma, já que o tempo
+        total passa a ser limitado pelo arquivo mais lento, não pela soma.
 
         O resultado é cacheado em docs_dir/.cache/ com base nos metadados dos
         arquivos (nome, tamanho, data de modificação) + modelo. Execuções
@@ -118,11 +123,18 @@ class DocumentExtractor:
             if cached is not None:
                 return cached
 
-        # Agrupa PDFs por tipo detectado
-        by_type: dict[DocumentType, list[dict]] = {t: [] for t in _PRIORITY_ORDER}
+        # Processa todos os PDFs em paralelo. load_single é síncrona (extract_text
+        # e extract_fields fazem chamadas HTTP bloqueantes ao Gemma), então
+        # delegamos a threads para não bloquear o event loop.
         for path in pdfs:
             logger.info("processando_pdf", arquivo=path.name)
-            raw_data = self.load_single(path)
+        raw_results = await asyncio.gather(*[
+            asyncio.to_thread(self.load_single, path) for path in pdfs
+        ])
+
+        # Agrupa PDFs por tipo detectado
+        by_type: dict[DocumentType, list[dict]] = {t: [] for t in _PRIORITY_ORDER}
+        for raw_data in raw_results:
             if raw_data.get("_doc_type"):
                 doc_type = raw_data.pop("_doc_type")
                 by_type[doc_type].append(raw_data)

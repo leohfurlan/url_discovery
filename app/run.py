@@ -125,7 +125,7 @@ async def _run(
             gemini_api_key = os.getenv("GEMINI_API_KEY")
             typer.echo(f"→ Carregando documentos reais de: {docs_dir}")
             extractor = DocumentExtractor(api_key=gemini_api_key, model=model)
-            profile = extractor.load_from_directory(docs_dir, use_cache=not no_cache)
+            profile = await extractor.load_from_directory(docs_dir, use_cache=not no_cache)
             if profile.is_empty():
                 typer.echo("⚠  Nenhum campo extraído dos PDFs — usando dados fake.")
                 profile = None
