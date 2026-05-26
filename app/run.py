@@ -18,8 +18,10 @@ Exemplos:
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import structlog
@@ -34,6 +36,43 @@ if str(_APP_DIR) not in sys.path:
     sys.path.insert(0, str(_APP_DIR))
 
 logger = structlog.get_logger(__name__)
+
+# Diretório padrão para logs de sessão (relativo à raiz do projeto).
+_LOG_DIR = _APP_DIR.parent / "logs"
+
+
+def _configure_logging(log_file: Path | None) -> None:
+    """Configura structlog para escrever em stderr e, opcionalmente, em arquivo.
+
+    Quando log_file é informado, todo evento estruturado é gravado também
+    no arquivo (sem cores ANSI). A formatação é a mesma do console — o
+    arquivo é fiel ao que o usuário viu na tela.
+    """
+    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stderr)]
+    if log_file is not None:
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        handlers.append(logging.FileHandler(log_file, encoding="utf-8"))
+
+    # basicConfig respeita handlers já configurados se force=True for omitido
+    # em runs subsequentes; usamos force=True para garantir reconfiguração
+    # quando o CLI é chamado várias vezes no mesmo processo (ex: testes).
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(message)s",
+        handlers=handlers,
+        force=True,
+    )
+
+    structlog.configure(
+        processors=[
+            structlog.processors.add_log_level,
+            structlog.processors.TimeStamper(fmt="%Y-%m-%d %H:%M:%S"),
+            structlog.dev.ConsoleRenderer(colors=False),
+        ],
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        wrapper_class=structlog.stdlib.BoundLogger,
+        cache_logger_on_first_use=True,
+    )
 
 app = typer.Typer(
     name="url-discovery",
@@ -56,6 +95,8 @@ def main(
     no_cache: bool = typer.Option(False, "--no-cache", help="Força reprocessamento dos PDFs mesmo que cache esteja disponível"),
     clear_cls_cache: bool = typer.Option(False, "--clear-cls-cache", help="Limpa o cache de classificação semântica (~/.url_discovery/cls_cache.json) antes de iniciar"),
     submit: bool = typer.Option(None, "--submit/--no-submit", help="Submete o formulário após preencher (sobrescreve ALLOW_FORM_SUBMIT do .env)"),
+    log_file: bool = typer.Option(True, "--log-file/--no-log-file", help="Salva log da sessão em logs/<portal>_<timestamp>.log (padrão: ativado)"),
+    log_file_path: Path | None = typer.Option(None, "--log-file-path", help="Caminho customizado para o log (sobrescreve o padrão)"),
 ) -> None:
     """Descobre e preenche automaticamente o formulário de cadastro de fornecedor.
 
@@ -63,6 +104,19 @@ def main(
     mas NÃO clica em Submit. Use --submit ou ALLOW_FORM_SUBMIT=true apenas
     em produção, após validar os dados gerados para o portal.
     """
+    # Configura logging ANTES de qualquer log estruturado para garantir que
+    # o arquivo recebe a sessão inteira (incluindo as mensagens de setup).
+    resolved_log_path: Path | None = None
+    if log_file:
+        if log_file_path is not None:
+            resolved_log_path = log_file_path
+        else:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            resolved_log_path = _LOG_DIR / f"{portal}_{timestamp}.log"
+    _configure_logging(resolved_log_path)
+    if resolved_log_path is not None:
+        typer.echo(f"→ Log da sessão será salvo em: {resolved_log_path}")
+
     # Resolução de prioridade: flag CLI > variável de ambiente > padrão seguro (false)
     if submit is None:
         allow_submit = os.environ.get("ALLOW_FORM_SUBMIT", "false").strip().lower() == "true"
