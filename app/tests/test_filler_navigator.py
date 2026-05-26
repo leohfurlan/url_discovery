@@ -95,7 +95,7 @@ class TestFormFillerTextInput:
         failures = await filler.fill_page(_make_page([field]), session)
 
         assert failures == []
-        locator.type.assert_awaited_once_with("VALOR_FAKE", delay=40)
+        locator.type.assert_awaited_once_with("VALOR_FAKE", delay=40, timeout=8_000)
 
     @pytest.mark.asyncio
     async def test_fill_email_field(self):
@@ -109,7 +109,7 @@ class TestFormFillerTextInput:
         failures = await filler.fill_page(_make_page([field]), session)
 
         assert failures == []
-        locator.type.assert_awaited_once_with("contato@empresa.com", delay=40)
+        locator.type.assert_awaited_once_with("contato@empresa.com", delay=40, timeout=8_000)
 
 
 class TestFormFillerSelect:
@@ -153,12 +153,17 @@ class TestFormFillerCheckbox:
         session = _make_session([field], {"#aceito": True})
         page = _make_mock_page()
         locator = _make_mock_locator()
+        # is_checked retorna False — força o filler a clicar para marcar
+        locator.is_checked = AsyncMock(return_value=False)
         page.locator = MagicMock(return_value=locator)
 
         filler = FormFiller(page)
         await filler.fill_page(_make_page([field]), session)
 
-        locator.check.assert_awaited_once()
+        # _fill_checkbox usa evaluate("el => el.click()") em vez de check()
+        # para funcionar em SPAs React onde o input fica oculto.
+        locator.evaluate.assert_awaited()
+        assert "el.click()" in str(locator.evaluate.call_args)
 
     @pytest.mark.asyncio
     async def test_checkbox_unchecked_when_false(self):
@@ -166,12 +171,15 @@ class TestFormFillerCheckbox:
         session = _make_session([field], {"#aceito": False})
         page = _make_mock_page()
         locator = _make_mock_locator()
+        # is_checked retorna True — força o filler a desmarcar via evaluate
+        locator.is_checked = AsyncMock(return_value=True)
         page.locator = MagicMock(return_value=locator)
 
         filler = FormFiller(page)
         await filler.fill_page(_make_page([field]), session)
 
-        locator.uncheck.assert_awaited_once()
+        locator.evaluate.assert_awaited()
+        assert "el.checked" in str(locator.evaluate.call_args)
 
 
 class TestFormFillerFile:
