@@ -1,7 +1,7 @@
 # TODO — Agente de Automação de Formulários
 
-> Última atualização: Dia 7 (2026-05-25)
-> Status geral: **Fase 4 EM ANDAMENTO** — 3 de 4 fases concluídas + módulo de importação de dados reais implementado
+> Última atualização: Dia 8 (2026-05-26)
+> Status geral: **Fase 4 EM ANDAMENTO** — 3 de 4 fases concluídas + módulo de importação de dados reais + cache semântico + campos condicionais implementados
 
 ---
 
@@ -155,6 +155,28 @@
 ```powershell
 python app\run.py "https://portal.example.com" empresa --docs-dir ./docs --no-submit
 ```
+
+### Concluído no Dia 8 (2026-05-26)
+
+- [x] **Classificação semântica em 3 estágios** — `infrastructure/llm/gemma_adapter.py`, `heuristic.py`, `cls_cache.py`
+  - `heuristic.py` — classificação local por regex/keywords, zero chamadas de API (cobre os campos mais comuns)
+  - `cls_cache.py` — cache persistente JSON em `~/.url_discovery/cls_cache.json` (SHA-256 do hint do campo)
+  - `GemmaClassifier` atualizado: heurística → cache → LLM (reduz drasticamente chamadas à API)
+  - `--clear-cls-cache` no CLI — limpa o cache antes de iniciar quando necessário
+- [x] **Cache de PDFs** — `domain/services/document_extractor.py`
+  - Resultado do DocumentExtractor cacheado entre sessões
+  - `--no-cache` no CLI — força reprocessamento mesmo com cache disponível
+- [x] **Campos condicionais** — `infrastructure/browser/navigator.py` `_fill_until_stable`
+  - Preenche campos em loop por rodada até o DOM parar de revelar novos campos
+  - Cobre formulários onde cada resposta desvela a próxima pergunta (ex: Jaguar Mining — Questionário de Integridade)
+  - `max_rounds=20` como limite de segurança
+- [x] **COMBOBOX** — `domain/entities/form.py` + `infrastructure/browser/crawler.py` + `filler.py`
+  - Novo `FieldType.COMBOBOX` para dropdowns React/SPA sem native `<select>` (role="combobox")
+  - `_fill_combobox`: clica para abrir → localiza opção por texto → fallback para digitar + Enter
+- [x] **Parsing de endereço em partes** — `domain/services/generator.py`
+  - `DataGenerator._ensure_addr_parts` parseia `CompanyProfile.endereco` em logradouro / número / complemento / bairro
+  - Coerência de sessão: partes geradas fake também são consistentes entre si
+- [x] **Testes unitários DOMCrawler** adicionados à suíte
 
 ### Pendente
 

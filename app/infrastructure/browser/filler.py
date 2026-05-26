@@ -23,6 +23,19 @@ logger = structlog.get_logger(__name__)
 
 # Tempo máximo (ms) para aguardar um elemento ficar interagível
 _DEFAULT_TIMEOUT = 8_000
+
+# Mapeamento UF → nome completo para fallback em <select> de estado
+_UF_TO_NAME: dict[str, str] = {
+    "AC": "Acre", "AL": "Alagoas", "AP": "Amapá", "AM": "Amazonas",
+    "BA": "Bahia", "CE": "Ceará", "DF": "Distrito Federal",
+    "ES": "Espírito Santo", "GO": "Goiás", "MA": "Maranhão",
+    "MT": "Mato Grosso", "MS": "Mato Grosso do Sul", "MG": "Minas Gerais",
+    "PA": "Pará", "PB": "Paraíba", "PR": "Paraná", "PE": "Pernambuco",
+    "PI": "Piauí", "RJ": "Rio de Janeiro", "RN": "Rio Grande do Norte",
+    "RS": "Rio Grande do Sul", "RO": "Rondônia", "RR": "Roraima",
+    "SC": "Santa Catarina", "SP": "São Paulo", "SE": "Sergipe",
+    "TO": "Tocantins",
+}
 # Delay entre keystrokes para portais sensíveis a ritmo de digitação
 _TYPE_DELAY_MS = 40
 
@@ -81,6 +94,8 @@ class FormFiller:
                     selector=field.selector,
                     field_type=field.field_type,
                     semantic=field.semantic_type,
+                    label=(field.label or "")[:60] or None,
+                    value=str(value)[:80] if value is not None else None,
                 )
             except FillError as exc:
                 logger.error("fill_error", selector=field.selector, error=str(exc))
@@ -103,16 +118,15 @@ class FormFiller:
     # ------------------------------------------------------------------
 
     async def _fill_field(self, field: FormField, value: Any) -> None:
-        # RADIO/CHECKBOX: inputs ficam ocultos por CSS em portais com estilos customizados
-        # (ex: Microsoft Forms). Não faz check de visibilidade — cada método trata isso.
-        if field.field_type not in (FieldType.RADIO, FieldType.CHECKBOX):
-            locator = self._resolve_locator(field.selector)
+        # RADIO/CHECKBOX: inputs ficam ocultos por CSS (ex: Microsoft Forms).
+        # SELECT: pode estar oculto em SPAs com componente custom por cima.
+        # COMBOBOX: é visível mas interage via clique, não via wait_for.
+        locator = self._resolve_locator(field.selector)
+        if field.field_type not in (FieldType.RADIO, FieldType.CHECKBOX, FieldType.SELECT, FieldType.COMBOBOX):
             try:
                 await locator.wait_for(state="visible", timeout=self._timeout)
             except Exception as exc:
                 raise FillError(f"Campo não ficou visível: {field.selector}") from exc
-        else:
-            locator = self._resolve_locator(field.selector)
 
         match field.field_type:
             case FieldType.TEXT | FieldType.EMAIL | FieldType.TEL | FieldType.NUMBER:
@@ -121,6 +135,8 @@ class FormFiller:
                 await self._fill_text(locator, str(value))
             case FieldType.SELECT:
                 await self._fill_select(locator, str(value))
+            case FieldType.COMBOBOX:
+                await self._fill_combobox(locator, str(value))
             case FieldType.RADIO:
                 await self._fill_radio(field, str(value))
             case FieldType.CHECKBOX:
@@ -146,34 +162,104 @@ class FormFiller:
 
     async def _fill_select(self, locator: Locator, value: str) -> None:
         """
-        Tenta selecionar por value, label ou index=0 como fallback.
+        Tenta selecionar por value, label, partial match ou index=0 como fallback.
         Portais brasileiros frequentemente têm options sem value consistente.
+        Suporta UF → nome completo para campos de estado (ex: "MG" → "Minas Gerais").
         """
+        expanded = _UF_TO_NAME.get(value.upper(), value)
+
+        # Tentativas via Playwright select_option (força para suportar selects ocultos em SPAs)
+        for attempt_value, use_label in [
+            (value, False),       # value exato
+            (value, True),        # label exato
+            (expanded, True),     # nome completo do estado (ex: "MG" → "Minas Gerais")
+        ]:
+            try:
+                kwargs = {"timeout": self._timeout, "force": True}
+                if use_label:
+                    await locator.select_option(label=attempt_value, **kwargs)
+                else:
+                    await locator.select_option(value=attempt_value, **kwargs)
+                return
+            except Exception:
+                continue
+
         try:
-            # tenta value exato
-            await locator.select_option(value=value, timeout=self._timeout)
-            return
+            # partial match: verifica option texts/values por substring
+            opts = await locator.evaluate(
+                "el => Array.from(el.options).map(o => ({v: o.value, t: o.text.trim()}))"
+            )
+            val_lower = value.lower()
+            exp_lower = expanded.lower()
+            for opt in opts:
+                t = opt["t"].lower()
+                v = opt["v"].lower()
+                if (
+                    val_lower in t or t in val_lower
+                    or exp_lower in t or t in exp_lower
+                    or val_lower in v
+                ):
+                    await locator.select_option(value=opt["v"], force=True, timeout=self._timeout)
+                    return
         except Exception:
             pass
 
         try:
-            # tenta label (texto visível)
-            await locator.select_option(label=value, timeout=self._timeout)
-            return
-        except Exception:
-            pass
-
-        try:
-            # fallback: primeira opção não-placeholder (index 1 ou 0)
-            options = await locator.evaluate(
+            # fallback JS: define valor diretamente e dispara evento change
+            # (para selects ocultos em SPAs onde select_option falha)
+            opts = await locator.evaluate(
                 "el => Array.from(el.options).map(o => o.value)"
             )
-            non_empty = [o for o in options if o.strip()]
+            non_empty = [o for o in opts if o.strip()]
             if non_empty:
-                await locator.select_option(value=non_empty[0], timeout=self._timeout)
+                await locator.evaluate(
+                    "(el, v) => { el.value = v; el.dispatchEvent(new Event('change', {bubbles: true})); }",
+                    non_empty[0],
+                )
                 return
         except Exception as exc:
             raise FillError(f"Não foi possível selecionar opção: {exc}") from exc
+
+    async def _fill_combobox(self, locator: Locator, value: str) -> None:
+        """
+        Preenche um combobox React/SPA (role="combobox").
+
+        Estratégia:
+        1. Clica no combobox para abrir o dropdown
+        2. Aguarda as opções aparecerem (role="option")
+        3. Encontra a opção cujo texto contém value (ou nome completo da UF)
+        4. Clica na opção
+        5. Fallback: digita o valor (para comboboxes com autocomplete)
+        """
+        expanded = _UF_TO_NAME.get(value.upper(), value)
+        try:
+            await locator.click(timeout=self._timeout)
+            await asyncio.sleep(0.3)
+
+            page = self._page
+            option_sel = "[role='option']:visible, [role='listitem']:visible, li[role='option']:visible"
+            root_loc = self._fl.locator(option_sel) if self._fl else page.locator(option_sel)
+
+            option_count = await root_loc.count()
+            if option_count > 0:
+                val_lower = value.lower()
+                exp_lower = expanded.lower()
+                for i in range(option_count):
+                    opt = root_loc.nth(i)
+                    text = (await opt.text_content() or "").strip().lower()
+                    if val_lower in text or exp_lower in text or text in val_lower or text in exp_lower:
+                        await opt.click(timeout=self._timeout)
+                        return
+                # nenhum match — clica na primeira opção não-placeholder
+                await root_loc.first.click(timeout=self._timeout)
+                return
+
+            # Fallback: digita o valor (combobox com autocomplete)
+            await locator.fill(value, timeout=self._timeout)
+            await asyncio.sleep(0.2)
+            await page.keyboard.press("Enter")
+        except Exception as exc:
+            raise FillError(f"Combobox não preenchido: {exc}") from exc
 
     async def _fill_radio(self, field: FormField, value: str) -> None:
         """
@@ -200,16 +286,29 @@ class FormFiller:
             pass
 
         # 2. Tenta pela label associada (texto visível da opção)
+        #    Suporta label[for="id"] (HTML padrão) e aria-labelledby (MS Forms / React SPAs)
         try:
             count = await group.count()
             for i in range(count):
                 radio = group.nth(i)
+
+                # 2a. label[for="id"] — HTML padrão
                 radio_id = await radio.get_attribute("id")
                 if radio_id:
                     label = self._resolve_locator(f'label[for="{radio_id}"]')
                     label_text = (await label.text_content() or "").strip()
                     if value.lower() in label_text.lower():
                         await label.click(timeout=self._timeout)
+                        return
+
+                # 2b. aria-labelledby — MS Forms / React SPAs sem id explícito
+                aria_ids = await radio.get_attribute("aria-labelledby")
+                if aria_ids:
+                    first_id = aria_ids.split()[0]
+                    label = self._resolve_locator(f"#{first_id}")
+                    label_text = (await label.text_content() or "").strip()
+                    if value.lower() in label_text.lower():
+                        await radio.evaluate("el => el.click()")
                         return
         except Exception:
             pass
@@ -222,7 +321,6 @@ class FormFiller:
 
     async def _fill_checkbox(self, locator: Locator, value: Any) -> None:
         # String não-vazia e não-explicitamente-falsa → marcar.
-        # Permite que valores como CNPJs ou caminhos de arquivo indiquem "tenho isso".
         _FALSY = {"false", "não", "nao", "no", "0", "n", ""}
         if isinstance(value, str):
             should_check = value.lower().strip() not in _FALSY
@@ -234,20 +332,12 @@ class FormFiller:
             if is_checked == should_check:
                 return
 
-            # Clica no elemento visível referenciado por aria-labelledby —
-            # único método que dispara os eventos React em SPAs como MS Forms.
-            aria_label_id = await locator.get_attribute("aria-labelledby")
-            if aria_label_id:
-                label = self._resolve_locator(f"#{aria_label_id}")
-                if await label.is_visible():
-                    await label.click(timeout=self._timeout)
-                    return
-
-            # Fallback: check/uncheck com force=True
             if should_check:
-                await locator.check(force=True, timeout=self._timeout)
+                # el.click() via JS — única abordagem confiável em SPAs React
+                # onde o input está oculto (opacity/position) mas registra eventos.
+                await locator.evaluate("el => el.click()")
             else:
-                await locator.uncheck(force=True, timeout=self._timeout)
+                await locator.evaluate("el => { if (el.checked) el.click(); }")
 
         except Exception as exc:
             raise FillError(str(exc)) from exc

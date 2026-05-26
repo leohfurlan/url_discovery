@@ -373,7 +373,7 @@ class NavigationOrchestrator:
 
             for f in classified:
                 if f.semantic_type and f.selector not in session.filled_values:
-                    session.filled_values[f.selector] = self._generator.generate(f.semantic_type)
+                    session.filled_values[f.selector] = self._generator.generate(f.semantic_type, field=f)
 
             form_page_round = FormPage(page_number=page_num, fields=classified)
             round_failures = await filler.fill_page(form_page_round, session)

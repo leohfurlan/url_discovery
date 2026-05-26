@@ -11,6 +11,12 @@ _FIELD_SELECTOR = (
     "textarea"
 )
 
+# Seletores para comboboxes customizados (React/SPA) — captura dropdowns que não
+# são native <select>, como os usados pelo MS Forms para questões de Dropdown.
+_COMBOBOX_SELECTOR = (
+    "[role='combobox']:not(input)"
+)
+
 
 class DOMCrawler:
     """Extrai FormField a partir do DOM da página atual."""
@@ -32,8 +38,6 @@ class DOMCrawler:
         for i in range(count):
             el = locator.nth(i)
             try:
-                if not await el.is_visible():
-                    continue
                 attrs = await el.evaluate(
                     r"""el => {
                         // Resolve label text via aria-labelledby (suporta múltiplos IDs separados por espaço)
@@ -87,6 +91,11 @@ class DOMCrawler:
             except Exception:
                 continue
 
+            # <select> pode estar oculto por CSS em SPAs que usam componente custom
+            # por cima do native select — inclui mesmo sem visibilidade.
+            if attrs["tag"] != "select" and not await el.is_visible():
+                continue
+
             field_type = _map_field_type(attrs["tag"], attrs["type"])
             selector = _build_selector(attrs)
             if not selector:
@@ -103,6 +112,63 @@ class DOMCrawler:
                     required=bool(attrs["required"]),
                     selector=selector,
                     options=attrs["options"],
+                )
+            )
+
+        # ── Comboboxes React/SPA (role="combobox", não native <select>) ─────────
+        # MS Forms usa isso para questões de Dropdown que não rendem <select>.
+        seen_selectors = {f.selector for f in fields}
+        cb_locator = root.locator(_COMBOBOX_SELECTOR)
+        cb_count = await cb_locator.count()
+        for i in range(cb_count):
+            el = cb_locator.nth(i)
+            try:
+                if not await el.is_visible():
+                    continue
+                attrs = await el.evaluate(
+                    r"""el => {
+                        const ariaLabelledby = el.getAttribute('aria-labelledby') || '';
+                        let labelText = '';
+                        if (ariaLabelledby) {
+                            labelText = ariaLabelledby.trim().split(/\s+/)
+                                .map(id => {
+                                    const el2 = document.getElementById(id);
+                                    return el2 ? el2.textContent.trim() : '';
+                                })
+                                .filter(t => t)
+                                .join(' ');
+                        }
+                        if (!labelText) labelText = el.getAttribute('aria-label') || '';
+                        return {
+                            tag: el.tagName.toLowerCase(),
+                            id: el.id || '',
+                            name: el.getAttribute('name') || '',
+                            label: labelText,
+                            ariaLabelledby: ariaLabelledby,
+                            placeholder: el.getAttribute('placeholder') || '',
+                        };
+                    }"""
+                )
+            except Exception:
+                continue
+
+            selector = (
+                f"#{attrs['id']}" if attrs["id"]
+                else f'[aria-labelledby="{attrs["ariaLabelledby"]}"]' if attrs["ariaLabelledby"]
+                else None
+            )
+            if not selector or selector in seen_selectors:
+                continue
+            seen_selectors.add(selector)
+            fields.append(
+                FormField(
+                    tag=attrs["tag"],
+                    field_type=FieldType.COMBOBOX,
+                    label=attrs["label"] or None,
+                    name=attrs["name"] or None,
+                    id=attrs["id"] or None,
+                    placeholder=attrs["placeholder"] or None,
+                    selector=selector,
                 )
             )
 

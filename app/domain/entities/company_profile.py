@@ -21,6 +21,10 @@ _SEMANTIC_TO_FIELD: dict[str, str] = {
     "telefone":            "telefone",
     "nome_pessoa":         "nome_socio_principal",
     "endereco":            "endereco",
+    "logradouro":          "logradouro",
+    "numero_endereco":     "numero_endereco",
+    "complemento":         "complemento",
+    "bairro":              "bairro",
     "cep":                 "cep",
     "cidade":              "cidade",
     "estado":              "estado",
@@ -42,7 +46,11 @@ class CompanyProfile(BaseModel):
     razao_social:        str | None = None
     nome_fantasia:       str | None = None
     atividade:           str | None = None   # descrição da CNAE principal
-    endereco:            str | None = None   # logradouro + número + complemento
+    endereco:            str | None = None   # logradouro + número + complemento (endereço completo)
+    logradouro:          str | None = None   # nome da rua/avenida
+    numero_endereco:     str | None = None   # número do imóvel
+    complemento:         str | None = None   # complemento (sala, apto, etc.)
+    bairro:              str | None = None
     cep:                 str | None = None
     cidade:              str | None = None
     estado:              str | None = None   # UF (2 letras)

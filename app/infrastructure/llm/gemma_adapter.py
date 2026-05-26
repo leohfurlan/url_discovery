@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import structlog
@@ -114,11 +115,25 @@ Campos:
 {campos_formatados}
 """.strip()
 
-        response = await self._client.aio.models.generate_content(
-            model=self._model,
-            contents=prompt,
-            config={"response_mime_type": "application/json"},
-        )
+        last_exc: Exception | None = None
+        for attempt in range(3):
+            try:
+                response = await self._client.aio.models.generate_content(
+                    model=self._model,
+                    contents=prompt,
+                    config={"response_mime_type": "application/json"},
+                )
+                break
+            except Exception as exc:
+                last_exc = exc
+                if attempt < 2 and "500" in str(exc):
+                    delay = 2 ** attempt
+                    logger.warning("llm_retry", attempt=attempt + 1, delay=delay, error=str(exc))
+                    await asyncio.sleep(delay)
+                    continue
+                raise
+        else:
+            raise last_exc  # type: ignore[misc]
 
         try:
             raw = json.loads(response.text or "[]")

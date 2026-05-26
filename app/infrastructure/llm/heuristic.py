@@ -29,18 +29,24 @@ _RULES: list[tuple[re.Pattern, SemanticType]] = [
     (re.compile(r'\be-?mail\b', re.I),                        SemanticType.EMAIL_CORPORATIVO),
     (re.compile(r'\b(telefone|celular|whatsapp|fone|phone)\b', re.I), SemanticType.TELEFONE),
 
-    # ── Endereço ──────────────────────────────────────────────────────────
-    (re.compile(r'\b(endere[cç]o|logradouro|address)\b', re.I), SemanticType.ENDERECO),
-    (re.compile(r'\bcep\b', re.I),                              SemanticType.CEP),
-    (re.compile(r'\b(cidade|city|munic[íi]pio)\b', re.I),      SemanticType.CIDADE),
-    (re.compile(r'\b(estado|state|\buf\b)\b', re.I),            SemanticType.ESTADO),
-    (re.compile(r'\b(pa[íi]s|country)\b', re.I),               SemanticType.PAIS),
+    # ── Endereço (partes específicas antes do tipo genérico) ─────────────────
+    (re.compile(r'\blogradouro\b', re.I),                                       SemanticType.LOGRADOURO),
+    (re.compile(r'\b(complemento|apto\.?|apartamento|sala)\b', re.I),           SemanticType.COMPLEMENTO),
+    (re.compile(r'\bbairro\b', re.I),                                            SemanticType.BAIRRO),
+    (re.compile(r'\b(endere[cç]o|logradouro|address)\b', re.I),                 SemanticType.ENDERECO),
+    (re.compile(r'\bcep\b', re.I),                                               SemanticType.CEP),
+    (re.compile(r'\b(cidade|city|munic[íi]pio)\b', re.I),                       SemanticType.CIDADE),
+    (re.compile(r'\b(estado|state|\buf\b)\b', re.I),                             SemanticType.ESTADO),
+    (re.compile(r'\b(pa[íi]s|country)\b', re.I),                                SemanticType.PAIS),
 
     # ── Dados bancários ───────────────────────────────────────────────────
     (re.compile(r'\bbanco\b', re.I),                            SemanticType.BANCO),
     (re.compile(r'\bag[eê]ncia\b', re.I),                       SemanticType.AGENCIA),
     (re.compile(r'\b(conta\s+(banc[aá]ria|corrente|poupan[cç]a)|n[uú]mero\s+da\s+conta)\b', re.I), SemanticType.CONTA),
     (re.compile(r'\b(favorecido|titular\s+da\s+conta|benefici[aá]rio)\b', re.I), SemanticType.FAVORECIDO),
+
+    # "Número" isolado após bancárias: é número do imóvel, não de conta/agência
+    (re.compile(r'\bn[uú]mero\b', re.I),                                         SemanticType.NUMERO_ENDERECO),
 
     # ── Sócios / responsáveis ─────────────────────────────────────────────
     (re.compile(r'\b(cpf\s+do\s+s[oó]cio|cpf\s+do\s+respons)\b', re.I), SemanticType.CPF_SOCIO),

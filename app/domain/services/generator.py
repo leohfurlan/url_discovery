@@ -1,7 +1,8 @@
 from __future__ import annotations
 import os
+import re
 from faker import Faker
-from domain.entities.form import SemanticType
+from domain.entities.form import FieldType, FormField, SemanticType
 from domain.entities.company_profile import CompanyProfile
 from infrastructure.formaters import (
     format_cnpj,
@@ -42,6 +43,18 @@ def generate(semantic_type: SemanticType) -> str:
 
         case SemanticType.ENDERECO:
             return fake.street_address()
+
+        case SemanticType.LOGRADOURO:
+            return fake.street_name()
+
+        case SemanticType.NUMERO_ENDERECO:
+            return fake.building_number()
+
+        case SemanticType.COMPLEMENTO:
+            return ""
+
+        case SemanticType.BAIRRO:
+            return fake.bairro()
 
         case SemanticType.CIDADE:
             return fake.city()
@@ -109,15 +122,49 @@ class DataGenerator:
         if profile and profile.razao_social:
             self._company_name = profile.razao_social
 
-    def generate(self, semantic_type: SemanticType) -> str:
+        # Partes do endereço (parseadas do perfil ou geradas fake para manter coerência)
+        self._addr_logradouro: str | None = None
+        self._addr_numero: str | None = None
+        self._addr_complemento: str | None = None
+        self._addr_bairro: str | None = None
+        self._addr_loaded = False
+
+    def generate(self, semantic_type: SemanticType, field: FormField | None = None) -> str:
+        # Documento PDF em checkbox: verifica disponibilidade real no perfil
+        if (
+            semantic_type == SemanticType.DOCUMENTO_PDF
+            and field is not None
+            and field.field_type == FieldType.CHECKBOX
+        ):
+            return self._document_available(field)
+
+        # Radio desconhecido: padrão conservador "Não" (evita abrir campos extras)
+        if semantic_type == SemanticType.UNKNOWN and field is not None and field.field_type == FieldType.RADIO:
+            return "Não"
+
+        # Partes de endereço — usa parsing do perfil com coerência de sessão
+        if semantic_type in (
+            SemanticType.LOGRADOURO, SemanticType.NUMERO_ENDERECO,
+            SemanticType.COMPLEMENTO, SemanticType.BAIRRO,
+        ):
+            return self._get_addr_part(semantic_type)
+
         # 1. Tenta dado real do perfil
         if self._profile:
             real = self._profile.get(semantic_type)
             if real:
-                if semantic_type in (SemanticType.RAZAO_SOCIAL, SemanticType.NOME_FANTASIA):
-                    if self._company_name is None:
-                        self._company_name = real
-                return real
+                # Para nome fantasia: se igual à razão social (caso MEI / empresário individual),
+                # gera um nome fantasia fictício para que os campos não sejam idênticos no form.
+                if (
+                    semantic_type == SemanticType.NOME_FANTASIA
+                    and real == self._profile.razao_social
+                ):
+                    real = None  # força fallback fake
+                else:
+                    if semantic_type in (SemanticType.RAZAO_SOCIAL, SemanticType.NOME_FANTASIA):
+                        if self._company_name is None:
+                            self._company_name = real
+                    return real
 
         # 2. Email real via COMPANY_EMAIL env var
         if semantic_type in (SemanticType.EMAIL_GENERICO, SemanticType.EMAIL_CORPORATIVO):
@@ -130,6 +177,74 @@ class DataGenerator:
             if self._company_name is None:
                 self._company_name = value
         return value
+
+    def _get_addr_part(self, semantic_type: SemanticType) -> str:
+        self._ensure_addr_parts()
+        match semantic_type:
+            case SemanticType.LOGRADOURO:
+                return self._addr_logradouro or ""
+            case SemanticType.NUMERO_ENDERECO:
+                return self._addr_numero or ""
+            case SemanticType.COMPLEMENTO:
+                return self._addr_complemento or ""
+            case SemanticType.BAIRRO:
+                return self._addr_bairro or ""
+            case _:
+                return ""
+
+    def _ensure_addr_parts(self) -> None:
+        """Carrega/parseia as partes do endereço uma única vez por sessão."""
+        if self._addr_loaded:
+            return
+        self._addr_loaded = True
+
+        p = self._profile
+        if p:
+            # Se o perfil já tem os campos separados, usa diretamente
+            if p.logradouro:
+                self._addr_logradouro = p.logradouro
+                self._addr_numero = p.numero_endereco or ""
+                self._addr_complemento = p.complemento or ""
+                self._addr_bairro = p.bairro or ""
+                return
+            # Tenta parsear o endereço completo: "RUA DAS FLORES 350 SALA 4"
+            if p.endereco:
+                m = re.match(
+                    r'^(.+?)\s+(\d[\dA-Z/-]*|S/?N)\s*,?\s*(.*)$',
+                    p.endereco.strip(),
+                    re.I,
+                )
+                if m:
+                    self._addr_logradouro = m.group(1).strip().rstrip(",").strip().title()
+                    self._addr_numero = m.group(2).strip().rstrip(",").strip()
+                    self._addr_complemento = m.group(3).strip().lstrip(",").strip()
+                    return
+                # Sem número identificável → usa o endereço inteiro como logradouro
+                self._addr_logradouro = p.endereco.strip().title()
+                self._addr_numero = ""
+                self._addr_complemento = ""
+
+        # Fallback fake — gerado uma vez e reutilizado na sessão
+        if not self._addr_logradouro:
+            self._addr_logradouro = fake.street_name()
+            self._addr_numero = fake.building_number()
+            self._addr_complemento = ""
+        if not self._addr_bairro:
+            self._addr_bairro = fake.bairro() if hasattr(fake, "bairro") else ""
+
+    def _document_available(self, field: FormField) -> str:
+        """Retorna 'true' se o documento descrito no label do checkbox está no perfil."""
+        if self._profile is None:
+            return "true"
+        label = (field.label or "").lower()
+        if "cnpj" in label:
+            return "true" if self._profile.cnpj else "false"
+        if any(k in label for k in ["contrato social", "alteração contratual"]):
+            return "true" if (self._profile.nome_socio_principal or self._profile.objeto_social) else "false"
+        if any(k in label for k in ["demonstrações financeiras", "balanço", "dre"]):
+            return "true" if (self._profile.banco or self._profile.faturamento_anual) else "false"
+        # Documento não identificado no perfil → não declarar que temos
+        return "false"
 
     def _produce_fake(self, semantic_type: SemanticType) -> str:
         if semantic_type == SemanticType.EMAIL_CORPORATIVO:

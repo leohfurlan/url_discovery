@@ -16,6 +16,7 @@ class FieldType(str, Enum):
     RADIO    = "radio"
     CHECKBOX = "checkbox"
     SELECT   = "select"
+    COMBOBOX = "combobox"   # dropdown React/SPA (role="combobox", não native <select>)
     TEXTAREA = "textarea"
     FILE     = "file"
     UNKNOWN  = "unknown"
@@ -43,6 +44,10 @@ class SemanticType(str, Enum):
     FAVORECIDO        = "favorecido"
     NOME_SOCIO        = "nome_socio"
     CPF_SOCIO         = "cpf_socio"
+    LOGRADOURO        = "logradouro"
+    NUMERO_ENDERECO   = "numero_endereco"
+    COMPLEMENTO       = "complemento"
+    BAIRRO            = "bairro"
     TEXTO_LIVRE       = "texto_livre"
     ACEITE_TERMOS     = "aceite_termos"
     DOCUMENTO_PDF     = "documento_pdf"

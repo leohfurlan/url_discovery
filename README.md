@@ -34,17 +34,20 @@ PortalDiscovery          Detecta iframe embutido, link ou botão que leva ao for
 DOMCrawler               Extrai campos do DOM (input, select, textarea, labels, opções).
   │                      Suporta iframes — Microsoft Forms é sempre servido em iframe.
   ▼
-GemmaClassifier          Classifica cada campo semanticamente via Gemma
-  │                      (CNPJ, Razão Social, E-mail corporativo, Estado, etc.)
+GemmaClassifier          Classifica cada campo em 3 estágios:
+  │                      1. Heurística local — regex/keywords, zero chamadas de API
+  │                      2. Cache persistente — ~/.url_discovery/cls_cache.json
+  │                      3. Gemma via API — só para campos sem resposta nos estágios anteriores
   ▼
 DataGenerator            Usa dados reais do CompanyProfile quando disponíveis;
   │                      fallback automático para Faker em campos não extraídos.
   ▼
 FormFiller               Preenche cada campo com o valor gerado.
-  │                      Estratégias por tipo: text, email, select, checkbox, radio, file.
+  │                      Estratégias por tipo: text, email, select, combobox, radio, checkbox, file, date.
   ▼
 NavigationOrchestrator   Gerencia formulários multi-página, detecta botões "Próximo" e
-                         identifica a página de confirmação de envio.
+                         identifica a página de confirmação de envio. Preenche campos
+                         condicionais em loop até o DOM estabilizar (_fill_until_stable).
 ```
 
 ## Instalação
@@ -108,6 +111,8 @@ python app\run.py --help
 | `--screenshots` | `/tmp` | Diretório para salvar screenshots |
 | `--model` | `gemma-4-26b-a4b-it` | Modelo Gemma para classificação e extração de documentos |
 | `--docs-dir` | — | Diretório com PDFs reais da empresa — extrai antes de abrir o browser |
+| `--no-cache` | `False` | Força reprocessamento dos PDFs mesmo que cache esteja disponível |
+| `--clear-cls-cache` | `False` | Limpa o cache de classificação semântica (`~/.url_discovery/cls_cache.json`) |
 | `--submit` / `--no-submit` | env | Sobrescreve `ALLOW_FORM_SUBMIT` do `.env` |
 
 ### Usando dados reais da empresa
@@ -241,7 +246,9 @@ app/
       filler.py                   FormFiller — preenche campos por tipo
       navigator.py                NavigationOrchestrator — fluxo multi-página
     llm/
-      gemma_adapter.py            GemmaClassifier — classifica campos via Gemma
+      gemma_adapter.py            GemmaClassifier — classifica campos (3 estágios: heurística → cache → LLM)
+      heuristic.py                Classificação local por regex/keywords (zero chamadas de API)
+      cls_cache.py                Cache persistente de classificações semânticas
     pdf/
       pdf_reader.py               Extração de texto e detecção de tipo de documento
       gemma_extractor.py          Extração estruturada de campos via Gemma (JSON)
@@ -259,7 +266,7 @@ urls                              Lista de portais mapeados
 
 Hexagonal simplificada: `domain/` não depende de nada externo. `infrastructure/` implementa os ports. `run.py` orquestra tudo.
 
-O classificador (`GemmaClassifier`) é trocável — qualquer implementação de `ClassifierPort` funciona. Se a `GEMINI_API_KEY` não estiver configurada, todos os campos são classificados como `UNKNOWN` e o gerador usa valores genéricos.
+O classificador (`GemmaClassifier`) é trocável — qualquer implementação de `ClassifierPort` funciona. A classificação opera em 3 estágios: heurística local por regex (sem API) → cache persistente em `~/.url_discovery/cls_cache.json` → Gemma via API apenas para campos sem resposta nos estágios anteriores. Se a `GEMINI_API_KEY` não estiver configurada, campos não cobertos pela heurística são classificados como `UNKNOWN`.
 
 ### Prioridade de resolução de valores
 

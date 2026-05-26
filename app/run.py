@@ -54,6 +54,7 @@ def main(
     model: str = typer.Option("gemma-4-26b-a4b-it", "--model", help="Modelo Gemma para classificação semântica e extração de documentos"),
     docs_dir: Path | None = typer.Option(None, "--docs-dir", help="Diretório com PDFs reais (Cartão CNPJ, Contrato Social, Demonstrações Financeiras)"),
     no_cache: bool = typer.Option(False, "--no-cache", help="Força reprocessamento dos PDFs mesmo que cache esteja disponível"),
+    clear_cls_cache: bool = typer.Option(False, "--clear-cls-cache", help="Limpa o cache de classificação semântica (~/.url_discovery/cls_cache.json) antes de iniciar"),
     submit: bool = typer.Option(None, "--submit/--no-submit", help="Submete o formulário após preencher (sobrescreve ALLOW_FORM_SUBMIT do .env)"),
 ) -> None:
     """Descobre e preenche automaticamente o formulário de cadastro de fornecedor.
@@ -72,6 +73,15 @@ def main(
         typer.echo("⚠  ALLOW_FORM_SUBMIT=true — o formulário SERÁ submetido.", err=True)
     else:
         typer.echo("ℹ  ALLOW_FORM_SUBMIT=false — campos serão preenchidos mas NÃO submetidos.")
+
+    if clear_cls_cache:
+        from pathlib import Path as _Path
+        cache_file = _Path.home() / ".url_discovery" / "cls_cache.json"
+        if cache_file.exists():
+            cache_file.unlink()
+            typer.echo(f"→ Cache de classificação removido: {cache_file}")
+        else:
+            typer.echo("→ Cache de classificação não encontrado (já estava limpo).")
 
     try:
         report = asyncio.run(
