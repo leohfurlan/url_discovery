@@ -221,12 +221,34 @@ class FormFiller:
             raise FillError(f"Radio não encontrado: {exc}") from exc
 
     async def _fill_checkbox(self, locator: Locator, value: Any) -> None:
-        should_check = bool(value) if not isinstance(value, str) else value.lower() in ("true", "sim", "yes", "1")
+        # String não-vazia e não-explicitamente-falsa → marcar.
+        # Permite que valores como CNPJs ou caminhos de arquivo indiquem "tenho isso".
+        _FALSY = {"false", "não", "nao", "no", "0", "n", ""}
+        if isinstance(value, str):
+            should_check = value.lower().strip() not in _FALSY
+        else:
+            should_check = bool(value)
+
         try:
+            is_checked = await locator.is_checked()
+            if is_checked == should_check:
+                return
+
+            # Clica no elemento visível referenciado por aria-labelledby —
+            # único método que dispara os eventos React em SPAs como MS Forms.
+            aria_label_id = await locator.get_attribute("aria-labelledby")
+            if aria_label_id:
+                label = self._resolve_locator(f"#{aria_label_id}")
+                if await label.is_visible():
+                    await label.click(timeout=self._timeout)
+                    return
+
+            # Fallback: check/uncheck com force=True
             if should_check:
-                await locator.check(timeout=self._timeout)
+                await locator.check(force=True, timeout=self._timeout)
             else:
-                await locator.uncheck(timeout=self._timeout)
+                await locator.uncheck(force=True, timeout=self._timeout)
+
         except Exception as exc:
             raise FillError(str(exc)) from exc
 

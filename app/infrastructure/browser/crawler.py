@@ -71,6 +71,7 @@ class DOMCrawler:
                             type: (el.type || '').toLowerCase(),
                             name: el.name || '',
                             id: el.id || '',
+                            value: el.value || '',
                             placeholder: el.placeholder || '',
                             required: el.required || false,
                             label: labelText,
@@ -131,6 +132,11 @@ def _build_selector(attrs: dict) -> str | None:
         tag = attrs["tag"]
         name = attrs["name"]
         t = attrs["type"]
+        # Checkbox: inclui [value] para diferenciar cada opção do mesmo grupo.
+        # Sem isso, o seletor de grupo resolve múltiplos elementos → strict mode.
+        if t == "checkbox" and attrs.get("value"):
+            v = attrs["value"].replace('"', '\\"')
+            return f'{tag}[type="{t}"][name="{name}"][value="{v}"]'
         if t:
             return f'{tag}[type="{t}"][name="{name}"]'
         return f'{tag}[name="{name}"]'

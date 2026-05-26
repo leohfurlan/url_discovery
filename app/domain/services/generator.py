@@ -76,6 +76,9 @@ def generate(semantic_type: SemanticType) -> str:
         case SemanticType.ACEITE_TERMOS:
             return "true"
 
+        case SemanticType.DOCUMENTO_PDF:
+            return "true"
+
         case SemanticType.TEXTO_LIVRE:
             return fake.sentence(nb_words=6)
 

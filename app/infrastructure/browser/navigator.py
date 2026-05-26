@@ -230,10 +230,11 @@ class NavigationOrchestrator:
                 #
                 # Ordem importa:
                 #   a) Se allow_submit=False e o próximo botão é submissão final,
-                #      para ANTES de checar success — botão de Submit visível
-                #      prova que não estamos numa página de confirmação real.
-                #   b) Só então verifica se a página de sucesso já apareceu
-                #      (formulário submetido via outro mecanismo, ex: Enter).
+                #      para ANTES de avançar.
+                #   b) Tenta clicar "Próximo"/"Next". Se não existe botão de avanço,
+                #      só então verifica se é página de sucesso — evita falso positivo
+                #      com formulários que têm "Thank you" no texto introdutório
+                #      (ex: Jaguar Mining) e ainda têm mais páginas a preencher.
                 if not self._allow_submit and await self._next_is_final_submit():
                     logger.warning(
                         "submit_blocked",
@@ -244,16 +245,12 @@ class NavigationOrchestrator:
                     report.result = NavigationResult.SUBMIT_BLOCKED
                     break
 
-                if await self._is_success_page():
-                    session.status = FormStatus.COMPLETED
-                    logger.info("success_after_fill", page=page_num)
-                    break
-
                 advanced = await self._click_next(page_num, portal_name)
                 if not advanced:
                     # Sem botão next pode significar formulário concluído
                     if await self._is_success_page():
                         session.status = FormStatus.COMPLETED
+                        logger.info("success_after_fill", page=page_num)
                     else:
                         report.result = NavigationResult.NEXT_BUTTON_NOT_FOUND
                     break
