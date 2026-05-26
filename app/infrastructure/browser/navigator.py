@@ -392,16 +392,43 @@ class NavigationOrchestrator:
                     count=len(round_failures),
                 )
 
-            await self._wait_for_conditional_dom()
-            current_fields = await crawler.extract_fields()
+            current_fields = await self._wait_for_conditional_dom(crawler, seen_selectors)
         else:
             logger.warning("conditional_max_rounds_reached", page=page_num, limit=max_rounds)
 
         return all_classified, all_failures
 
-    async def _wait_for_conditional_dom(self) -> None:
-        """Espera breve para campos condicionais renderizarem após um preenchimento."""
-        await asyncio.sleep(0.4)
+    async def _wait_for_conditional_dom(
+        self,
+        crawler: DOMCrawler,
+        seen_selectors: set[str],
+    ) -> list[FormField]:
+        """Espera breve por campos condicionais e retorna a próxima crawl.
+
+        Em vez de dormir 0.4s fixos, faz polling com early-exit:
+        - se nenhum campo novo apareceu em duas amostragens seguidas, sai
+          imediatamente (DOM estabilizou ou não havia campos condicionais).
+        - caso contrário, espera até ~1.2s total para o React/SPA terminar
+          de renderizar os campos dependentes.
+
+        Em páginas sem condicionais (rounds=1) o custo cai de ~0.4s para
+        ~0.15s; em páginas pesadas (Jaguar Mining pág. 3, rounds=13) o
+        ganho composto é significativo.
+        """
+        previous_new: frozenset[str] = frozenset()
+        latest_fields: list[FormField] = []
+        for _ in range(8):  # máx ~1.2s
+            await asyncio.sleep(0.15)
+            latest_fields = await crawler.extract_fields()
+            new_selectors = frozenset(
+                f.selector for f in latest_fields if f.selector not in seen_selectors
+            )
+            if not new_selectors:
+                return latest_fields
+            if new_selectors == previous_new:
+                return latest_fields
+            previous_new = new_selectors
+        return latest_fields
 
     async def _wait_for_stable_dom(self) -> None:
         """
@@ -437,6 +464,22 @@ class NavigationOrchestrator:
         """
         fl = self._page.frame_locator(self._iframe_selector) if self._iframe_selector else None
         root = fl if fl else self._page
+
+        # Pré-check: ainda estamos na mesma página? Se nenhum seletor conhecido
+        # estiver presente, o clique em Avançar funcionou e estamos em outra página.
+        # Sem esse check, o fallback defensivo abaixo tenta re-preencher campos
+        # antigos na página nova e gera timeouts em cascata.
+        sample = known_fields[: min(5, len(known_fields))]
+        on_same_page = False
+        for f in sample:
+            try:
+                if await root.locator(f.selector).count() > 0:
+                    on_same_page = True
+                    break
+            except Exception:
+                continue
+        if not on_same_page:
+            return []
 
         try:
             total_invalid = await root.locator("[aria-invalid='true']").count()
