@@ -148,8 +148,14 @@ class DataGenerator:
         ):
             return self._document_available(field)
 
-        # Radio desconhecido: padrão conservador "Não" (evita abrir campos extras)
-        if semantic_type == SemanticType.UNKNOWN and field is not None and field.field_type == FieldType.RADIO:
+        # Radio sem classificação útil: padrão conservador "Não".
+        # Cobre UNKNOWN e DESCONHECIDO — evita declarar afirmativas perigosas
+        # em questionários de integridade (ex: "A empresa já teve problemas legais?").
+        if (
+            semantic_type in (SemanticType.UNKNOWN, SemanticType.DESCONHECIDO)
+            and field is not None
+            and field.field_type == FieldType.RADIO
+        ):
             return "Não"
 
         # Partes de endereço — usa parsing do perfil com coerência de sessão
@@ -203,22 +209,24 @@ class DataGenerator:
                 return ""
 
     def _ensure_addr_parts(self) -> None:
-        """Carrega/parseia as partes do endereço uma única vez por sessão."""
+        """Carrega/parseia as partes do endereço uma única vez por sessão.
+
+        Carrega o que o perfil oferece e completa as partes faltantes com
+        valores fake — assim, se a extração do cartão CNPJ não pegou o bairro,
+        o campo não fica vazio no formulário.
+        """
         if self._addr_loaded:
             return
         self._addr_loaded = True
 
         p = self._profile
         if p:
-            # Se o perfil já tem os campos separados, usa diretamente
             if p.logradouro:
                 self._addr_logradouro = p.logradouro
-                self._addr_numero = p.numero_endereco or ""
-                self._addr_complemento = p.complemento or ""
-                self._addr_bairro = p.bairro or ""
-                return
-            # Tenta parsear o endereço completo: "RUA DAS FLORES 350 SALA 4"
-            if p.endereco:
+                self._addr_numero = p.numero_endereco or self._addr_numero
+                self._addr_complemento = p.complemento or self._addr_complemento
+            elif p.endereco:
+                # Tenta parsear o endereço completo: "RUA DAS FLORES 350 SALA 4"
                 m = re.match(
                     r'^(.+?)\s+(\d[\dA-Z/-]*|S/?N)\s*,?\s*(.*)$',
                     p.endereco.strip(),
@@ -228,19 +236,22 @@ class DataGenerator:
                     self._addr_logradouro = m.group(1).strip().rstrip(",").strip().title()
                     self._addr_numero = m.group(2).strip().rstrip(",").strip()
                     self._addr_complemento = m.group(3).strip().lstrip(",").strip()
-                    return
-                # Sem número identificável → usa o endereço inteiro como logradouro
-                self._addr_logradouro = p.endereco.strip().title()
-                self._addr_numero = ""
-                self._addr_complemento = ""
+                else:
+                    # Sem número identificável → usa o endereço inteiro como logradouro
+                    self._addr_logradouro = p.endereco.strip().title()
+            # Bairro é independente — pode vir do perfil mesmo sem logradouro
+            if p.bairro:
+                self._addr_bairro = p.bairro
 
-        # Fallback fake — gerado uma vez e reutilizado na sessão
+        # Completa partes faltantes com fakes (gerados uma vez por sessão)
         if not self._addr_logradouro:
             self._addr_logradouro = fake.street_name()
+        if not self._addr_numero:
             self._addr_numero = fake.building_number()
-            self._addr_complemento = ""
         if not self._addr_bairro:
             self._addr_bairro = fake.bairro() if hasattr(fake, "bairro") else ""
+        if self._addr_complemento is None:
+            self._addr_complemento = ""
 
     def _document_available(self, field: FormField) -> str:
         """Retorna 'true' se o documento descrito no label do checkbox está no perfil."""
