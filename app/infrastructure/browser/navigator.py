@@ -22,7 +22,7 @@ from typing import Callable, Awaitable
 import structlog
 from playwright.async_api import Page
 
-from domain.entities.form import ExecutionResult, FormPage, FormSession, FormStatus
+from domain.entities.form import ExecutionResult, FormField, FormPage, FormSession, FormStatus
 from domain.services.classifier_port import ClassifierPort
 from domain.services.generator import DataGenerator
 from infrastructure.browser.crawler import DOMCrawler
@@ -192,20 +192,18 @@ class NavigationOrchestrator:
 
                 form_page = FormPage(page_number=page_num, fields=raw_fields)
 
-                # 2. Classifica
-                classified_fields = await self._classifier.classify(raw_fields)
-                form_page.fields = classified_fields
-
-                # 3. Gera valores
-                for f in classified_fields:
-                    if f.semantic_type and f.selector not in session.filled_values:
-                        value = self._generator.generate(f.semantic_type)
-                        session.filled_values[f.selector] = value
-
-                # 4. Preenche
+                # 2–4. Classifica, gera e preenche em loop até estabilizar.
+                #       Cobre campos condicionais que surgem após cada resposta
+                #       (ex: Jaguar Mining — Questionário de Integridade, pág. 3).
                 fl = self._page.frame_locator(self._iframe_selector) if self._iframe_selector else None
                 filler = FormFiller(self._page, frame_locator=fl, slow_fill=self._slow_fill)
-                failures = await filler.fill_page(form_page, session)
+                classified_fields, failures = await self._fill_until_stable(
+                    initial_fields=raw_fields,
+                    page_num=page_num,
+                    session=session,
+                    filler=filler,
+                )
+                form_page.fields = classified_fields
 
                 # 5. Screenshot
                 screenshot_path = await filler.take_screenshot(
@@ -214,7 +212,7 @@ class NavigationOrchestrator:
 
                 step = StepReport(
                     page_number=page_num,
-                    fields_found=len(raw_fields),
+                    fields_found=len(classified_fields),
                     fields_filled=len(classified_fields) - len(failures),
                     failures=failures,
                     screenshot=str(screenshot_path),
@@ -336,6 +334,73 @@ class NavigationOrchestrator:
         except Exception:
             return False
 
+    async def _fill_until_stable(
+        self,
+        initial_fields: list[FormField],
+        page_num: int,
+        session: FormSession,
+        filler: FormFiller,
+        max_rounds: int = 20,
+    ) -> tuple[list[FormField], list[str]]:
+        """
+        Preenche campos em loop até o DOM parar de revelar novos campos.
+
+        A cada rodada:
+          1. Filtra apenas campos com seletor ainda não visto
+          2. Classifica, gera valor e preenche
+          3. Espera o DOM estabilizar (campos condicionais renderizarem)
+          4. Re-crawla — se surgiram novos campos, repete
+
+        Garante que formulários com campos encadeados (cada resposta revela
+        a próxima pergunta) sejam completamente preenchidos antes de avançar.
+        """
+        seen_selectors: set[str] = set()
+        all_classified: list[FormField] = []
+        all_failures: list[str] = []
+        crawler = DOMCrawler(self._page, iframe_selector=self._iframe_selector)
+
+        current_fields = initial_fields
+
+        for round_num in range(max_rounds):
+            new_fields = [f for f in current_fields if f.selector not in seen_selectors]
+
+            if not new_fields:
+                logger.debug("conditional_fields_stable", page=page_num, rounds=round_num)
+                break
+
+            for f in new_fields:
+                seen_selectors.add(f.selector)
+
+            classified = await self._classifier.classify(new_fields)
+            all_classified.extend(classified)
+
+            for f in classified:
+                if f.semantic_type and f.selector not in session.filled_values:
+                    session.filled_values[f.selector] = self._generator.generate(f.semantic_type)
+
+            form_page_round = FormPage(page_number=page_num, fields=classified)
+            round_failures = await filler.fill_page(form_page_round, session)
+            all_failures.extend(round_failures)
+
+            if round_failures:
+                logger.warning(
+                    "conditional_round_failures",
+                    page=page_num,
+                    round=round_num,
+                    count=len(round_failures),
+                )
+
+            await self._wait_for_conditional_dom()
+            current_fields = await crawler.extract_fields()
+        else:
+            logger.warning("conditional_max_rounds_reached", page=page_num, limit=max_rounds)
+
+        return all_classified, all_failures
+
+    async def _wait_for_conditional_dom(self) -> None:
+        """Espera breve para campos condicionais renderizarem após um preenchimento."""
+        await asyncio.sleep(0.4)
+
     async def _wait_for_stable_dom(self) -> None:
         """
         Aguarda o DOM estabilizar após navegação ou clique.
@@ -344,7 +409,7 @@ class NavigationOrchestrator:
         Usa state="visible" para garantir que o React/SPA populou os atributos
         (id, name, aria-*) antes do crawler tentar extraí-los.
         """
-        await asyncio.sleep(0.5)  # margem mínima antes de checar
+        await asyncio.sleep(0.15)  # margem mínima antes de checar
         root = (
             self._page.frame_locator(self._iframe_selector)
             if self._iframe_selector
@@ -357,7 +422,7 @@ class NavigationOrchestrator:
         try:
             await root.locator(field_sel).first.wait_for(state="visible", timeout=8_000)
         except Exception:
-            await asyncio.sleep(2.0)
+            await asyncio.sleep(0.8)
 
 
 # ------------------------------------------------------------------

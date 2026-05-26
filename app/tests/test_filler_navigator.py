@@ -275,7 +275,7 @@ class TestNavigationOrchestrator:
 
         page = _make_mock_page()
         page.url = "https://portal.example.com/form"
-        page.content = AsyncMock(return_value="<html><body>obrigado pelo cadastro</body></html>")
+        page.evaluate = AsyncMock(return_value="obrigado pelo cadastro")
         page.locator = MagicMock(return_value=_make_mock_locator())
         page.screenshot = AsyncMock()
 
