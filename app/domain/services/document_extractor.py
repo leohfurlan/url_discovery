@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import structlog
 from pathlib import Path
 
@@ -8,6 +10,37 @@ from infrastructure.pdf.pdf_reader import extract_text, detect_document_type
 from infrastructure.pdf.gemma_extractor import extract_fields
 
 logger = structlog.get_logger(__name__)
+
+
+def _cache_key(pdfs: list[Path], model: str) -> str:
+    fingerprint = [(p.name, p.stat().st_size, p.stat().st_mtime_ns) for p in sorted(pdfs)]
+    blob = json.dumps({"files": fingerprint, "model": model}, sort_keys=True)
+    return hashlib.sha256(blob.encode()).hexdigest()[:16]
+
+
+def _load_cache(docs_dir: Path, key: str) -> CompanyProfile | None:
+    cache_file = docs_dir / ".cache" / f"profile_{key}.json"
+    if not cache_file.exists():
+        return None
+    try:
+        data = json.loads(cache_file.read_text(encoding="utf-8"))
+        profile = CompanyProfile(**data)
+        logger.info("cache_hit", chave=key, arquivo=str(cache_file))
+        return profile
+    except Exception as exc:
+        logger.warning("cache_corrompido", chave=key, erro=str(exc))
+        return None
+
+
+def _save_cache(docs_dir: Path, key: str, profile: CompanyProfile) -> None:
+    cache_dir = docs_dir / ".cache"
+    cache_dir.mkdir(exist_ok=True)
+    cache_file = cache_dir / f"profile_{key}.json"
+    cache_file.write_text(
+        json.dumps(profile.model_dump(), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    logger.info("cache_salvo", chave=key, arquivo=str(cache_file))
 
 # Ordem de prioridade: campos de documentos mais cedo na lista sobrescrevem os posteriores.
 _PRIORITY_ORDER = [
@@ -62,16 +95,27 @@ class DocumentExtractor:
         self._model = model
         self._ocr_model = ocr_model
 
-    def load_from_directory(self, docs_dir: Path) -> CompanyProfile:
+    def load_from_directory(self, docs_dir: Path, use_cache: bool = True) -> CompanyProfile:
         """Processa todos os PDFs do diretório e mescla em um único CompanyProfile.
 
         Campos do Cartão CNPJ têm prioridade; seguidos pelo Contrato Social
         e pelas Demonstrações Financeiras.
+
+        O resultado é cacheado em docs_dir/.cache/ com base nos metadados dos
+        arquivos (nome, tamanho, data de modificação) + modelo. Execuções
+        subsequentes sem alterações nos PDFs retornam instantaneamente.
+        Use use_cache=False para forçar reprocessamento.
         """
         pdfs = sorted(docs_dir.glob("*.pdf"))
         if not pdfs:
             logger.warning("nenhum_pdf_encontrado", diretorio=str(docs_dir))
             return CompanyProfile()
+
+        if use_cache:
+            key = _cache_key(pdfs, self._model)
+            cached = _load_cache(docs_dir, key)
+            if cached is not None:
+                return cached
 
         # Agrupa PDFs por tipo detectado
         by_type: dict[DocumentType, list[dict]] = {t: [] for t in _PRIORITY_ORDER}
@@ -100,6 +144,10 @@ class DocumentExtractor:
             banco=profile.banco,
             campos_preenchidos=sum(1 for v in merged.values() if v),
         )
+
+        if use_cache:
+            _save_cache(docs_dir, key, profile)
+
         return profile
 
     def load_single(self, path: Path) -> dict:

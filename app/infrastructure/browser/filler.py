@@ -103,12 +103,16 @@ class FormFiller:
     # ------------------------------------------------------------------
 
     async def _fill_field(self, field: FormField, value: Any) -> None:
-        locator = self._resolve_locator(field.selector)
-
-        try:
-            await locator.wait_for(state="visible", timeout=self._timeout)
-        except Exception as exc:
-            raise FillError(f"Campo não ficou visível: {field.selector}") from exc
+        # RADIO/CHECKBOX: inputs ficam ocultos por CSS em portais com estilos customizados
+        # (ex: Microsoft Forms). Não faz check de visibilidade — cada método trata isso.
+        if field.field_type not in (FieldType.RADIO, FieldType.CHECKBOX):
+            locator = self._resolve_locator(field.selector)
+            try:
+                await locator.wait_for(state="visible", timeout=self._timeout)
+            except Exception as exc:
+                raise FillError(f"Campo não ficou visível: {field.selector}") from exc
+        else:
+            locator = self._resolve_locator(field.selector)
 
         match field.field_type:
             case FieldType.TEXT | FieldType.EMAIL | FieldType.TEL | FieldType.NUMBER:
@@ -173,26 +177,46 @@ class FormFiller:
 
     async def _fill_radio(self, field: FormField, value: str) -> None:
         """
-        Radio buttons agrupados por `name`. Procura o input cujo value ou
-        label associado contenha o valor desejado, senão clica no primeiro.
-        """
-        # tenta localizar pelo atributo value
-        selector_value = f'input[type="radio"][name="{field.name}"][value="{value}"]'
-        locator = self._resolve_locator(selector_value)
+        Radio buttons agrupados por `name`.
 
+        Estratégia (em ordem):
+        1. check(force=True) no input cujo `value` HTML bate com `value`
+        2. Clicar na <label> cuja texto contenha `value` (robusto para MS Forms
+           onde o value HTML é um GUID, não o texto da opção)
+        3. check(force=True) no primeiro radio do grupo como fallback
+        """
+        group_selector = f'input[type="radio"][name="{field.name}"]'
+        group = self._resolve_locator(group_selector)
+
+        # 1. Tenta pelo atributo value HTML
+        by_value = self._resolve_locator(
+            f'input[type="radio"][name="{field.name}"][value="{value}"]'
+        )
         try:
-            count = await locator.count()
-            if count > 0:
-                await locator.first.check(timeout=self._timeout)
+            if await by_value.count() > 0:
+                await by_value.first.check(force=True, timeout=self._timeout)
                 return
         except Exception:
             pass
 
-        # fallback: clica no primeiro radio do grupo
-        fallback_selector = f'input[type="radio"][name="{field.name}"]'
-        fallback = self._resolve_locator(fallback_selector)
+        # 2. Tenta pela label associada (texto visível da opção)
         try:
-            await fallback.first.check(timeout=self._timeout)
+            count = await group.count()
+            for i in range(count):
+                radio = group.nth(i)
+                radio_id = await radio.get_attribute("id")
+                if radio_id:
+                    label = self._resolve_locator(f'label[for="{radio_id}"]')
+                    label_text = (await label.text_content() or "").strip()
+                    if value.lower() in label_text.lower():
+                        await label.click(timeout=self._timeout)
+                        return
+        except Exception:
+            pass
+
+        # 3. Fallback: primeiro radio do grupo com force=True
+        try:
+            await group.first.check(force=True, timeout=self._timeout)
         except Exception as exc:
             raise FillError(f"Radio não encontrado: {exc}") from exc
 

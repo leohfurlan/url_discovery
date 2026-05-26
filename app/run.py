@@ -53,6 +53,7 @@ def main(
     screenshot_dir: str | None = typer.Option(None, "--screenshots", help="Diretório para salvar screenshots (padrão: /tmp)"),
     model: str = typer.Option("gemma-4-26b-a4b-it", "--model", help="Modelo Gemma para classificação semântica e extração de documentos"),
     docs_dir: Path | None = typer.Option(None, "--docs-dir", help="Diretório com PDFs reais (Cartão CNPJ, Contrato Social, Demonstrações Financeiras)"),
+    no_cache: bool = typer.Option(False, "--no-cache", help="Força reprocessamento dos PDFs mesmo que cache esteja disponível"),
     submit: bool = typer.Option(None, "--submit/--no-submit", help="Submete o formulário após preencher (sobrescreve ALLOW_FORM_SUBMIT do .env)"),
 ) -> None:
     """Descobre e preenche automaticamente o formulário de cadastro de fornecedor.
@@ -74,7 +75,7 @@ def main(
 
     try:
         report = asyncio.run(
-            _run(url, portal, headless, slow_fill, max_pages, iframe, screenshot_dir, model, allow_submit, docs_dir)
+            _run(url, portal, headless, slow_fill, max_pages, iframe, screenshot_dir, model, allow_submit, docs_dir, no_cache)
         )
         _print_report(report, portal)
         raise typer.Exit(code=0 if report.result.name == "SUCCESS" else 1)
@@ -96,6 +97,7 @@ async def _run(
     model: str,
     allow_submit: bool,
     docs_dir: Path | None = None,
+    no_cache: bool = False,
 ):
     from playwright.async_api import async_playwright
     from infrastructure.llm.gemma_adapter import GemmaClassifier
@@ -113,7 +115,7 @@ async def _run(
             gemini_api_key = os.getenv("GEMINI_API_KEY")
             typer.echo(f"→ Carregando documentos reais de: {docs_dir}")
             extractor = DocumentExtractor(api_key=gemini_api_key, model=model)
-            profile = extractor.load_from_directory(docs_dir)
+            profile = extractor.load_from_directory(docs_dir, use_cache=not no_cache)
             if profile.is_empty():
                 typer.echo("⚠  Nenhum campo extraído dos PDFs — usando dados fake.")
                 profile = None
