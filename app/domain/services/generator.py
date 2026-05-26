@@ -130,6 +130,16 @@ class DataGenerator:
         self._addr_loaded = False
 
     def generate(self, semantic_type: SemanticType, field: FormField | None = None) -> str:
+        # Corrige classificação errada em campo cujo label indica nome fantasia.
+        # Cobre casos onde a heurística bateu em RAZAO_SOCIAL ou NOME_SOCIO antes
+        # de checar "fantasia" / "comercial" (ex: "Nome da Empresa (Nome Fantasia)").
+        if field is not None:
+            label_lower = (field.label or "").lower()
+            if semantic_type in (SemanticType.RAZAO_SOCIAL, SemanticType.NOME_SOCIO, SemanticType.NOME_PESSOA) and (
+                "fantasia" in label_lower or "nome comercial" in label_lower
+            ):
+                semantic_type = SemanticType.NOME_FANTASIA
+
         # Documento PDF em checkbox: verifica disponibilidade real no perfil
         if (
             semantic_type == SemanticType.DOCUMENTO_PDF

@@ -8,7 +8,17 @@ Retorna None quando não há match suficientemente confiável.
 from __future__ import annotations
 
 import re
-from domain.entities.form import FormField, SemanticType
+from domain.entities.form import FieldType, FormField, SemanticType
+
+# Classificações que nunca fazem sentido em campos de texto longo (textarea)
+_TEXTAREA_BLOCKED: set[SemanticType] = {
+    SemanticType.EMAIL_CORPORATIVO,
+    SemanticType.EMAIL_GENERICO,
+    SemanticType.CNPJ,
+    SemanticType.CPF,
+    SemanticType.CEP,
+    SemanticType.TELEFONE,
+}
 
 # Tuplas (padrão compilado, SemanticType).
 # Ordem importa: regras mais específicas primeiro para evitar que "nome"
@@ -21,9 +31,12 @@ _RULES: list[tuple[re.Pattern, SemanticType]] = [
     (re.compile(r'\binscri[cç][aã]o\s+municipal\b', re.I),  SemanticType.INSCRICAO_MUN),
 
     # ── Identificação da empresa ──────────────────────────────────────────
-    (re.compile(r'\b(raz[aã]o\s+social|nome\s+da\s+empresa|company\s+name|denomina[cç][aã]o)\b', re.I), SemanticType.RAZAO_SOCIAL),
-    (re.compile(r'\b(nome\s+fantasia|nome\s+comercial|trade\s+name)\b', re.I),                           SemanticType.NOME_FANTASIA),
-    (re.compile(r'\b(atividade|cnae|ramo\s+de\s+atividade|segmento|setor)\b', re.I),                     SemanticType.ATIVIDADE),
+    # NOME_FANTASIA antes de RAZAO_SOCIAL: labels como "Nome da Empresa (Nome Fantasia)"
+    # contêm "nome da empresa" (regex de RAZAO_SOCIAL) e "fantasia" ao mesmo tempo —
+    # a ordem garante que o mais específico vence.
+    (re.compile(r'\b(nome\s+fantasia|nome\s+de\s+fantasia|nome\s+comercial|trade\s+name|fantasia)\b', re.I), SemanticType.NOME_FANTASIA),
+    (re.compile(r'\b(raz[aã]o\s+social|nome\s+da\s+empresa|company\s+name|denomina[cç][aã]o)\b', re.I),     SemanticType.RAZAO_SOCIAL),
+    (re.compile(r'\b(atividade|cnae|ramo\s+de\s+atividade|segmento|setor)\b', re.I),                         SemanticType.ATIVIDADE),
 
     # ── Contato ───────────────────────────────────────────────────────────
     (re.compile(r'\be-?mail\b', re.I),                        SemanticType.EMAIL_CORPORATIVO),
@@ -71,7 +84,10 @@ def heuristic_classify(field: FormField) -> SemanticType | None:
         field.placeholder or "",
         " ".join(field.options),
     ]))
+    is_textarea = field.field_type == FieldType.TEXTAREA
     for pattern, semantic in _RULES:
+        if is_textarea and semantic in _TEXTAREA_BLOCKED:
+            continue
         if pattern.search(text):
             return semantic
     return None

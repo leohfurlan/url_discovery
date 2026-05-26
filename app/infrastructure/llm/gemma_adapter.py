@@ -7,12 +7,21 @@ import structlog
 from google import genai as google_genai
 from dotenv import load_dotenv
 
-from domain.entities.form import FormField, SemanticType
+from domain.entities.form import FieldType, FormField, SemanticType
 from domain.services.classifier_port import ClassifierPort
-from infrastructure.llm.heuristic import heuristic_classify
+from infrastructure.llm.heuristic import _TEXTAREA_BLOCKED, heuristic_classify
 from infrastructure.llm import cls_cache as cache
 
 logger = structlog.get_logger(__name__)
+
+
+def _sanitize(field: FormField) -> FormField:
+    """Corrige classificações impossíveis dado o tipo do campo.
+    Ex: textarea não pode ser e-mail, CNPJ, CPF, CEP, telefone.
+    """
+    if field.field_type == FieldType.TEXTAREA and field.semantic_type in _TEXTAREA_BLOCKED:
+        return field.model_copy(update={"semantic_type": SemanticType.TEXTO_LIVRE})
+    return field
 
 
 class GemmaClassifier(ClassifierPort):
@@ -68,7 +77,7 @@ class GemmaClassifier(ClassifierPort):
                 cache.put_batch(to_cache)
 
         return [
-            r if r is not None else field.model_copy(update={"semantic_type": SemanticType.UNKNOWN})
+            _sanitize(r if r is not None else field.model_copy(update={"semantic_type": SemanticType.UNKNOWN}))
             for r, field in zip(result, fields)
         ]
 

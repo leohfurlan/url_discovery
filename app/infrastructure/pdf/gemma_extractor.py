@@ -25,7 +25,8 @@ Campos:
 - razao_social: string
 - nome_fantasia: string (pode ser igual à razão social ou null)
 - atividade: string (descrição da atividade econômica principal / CNAE)
-- endereco: string (logradouro, número e complemento)
+- endereco: string (logradouro, número e complemento — sem bairro e sem CEP)
+- bairro: string (campo "BAIRRO/DISTRITO" do cartão CNPJ)
 - cep: string (formato XXXXX-XXX)
 - cidade: string
 - estado: string (sigla da UF, 2 letras maiúsculas)

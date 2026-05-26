@@ -255,6 +255,11 @@ class NavigationOrchestrator:
                         report.result = NavigationResult.NEXT_BUTTON_NOT_FOUND
                     break
 
+                # Verifica e corrige erros de validação antes de prosseguir
+                await self._advance_past_validation(
+                    page_num, portal_name, classified_fields, session, filler
+                )
+
                 # Aguarda navegação/renderização
                 await self._wait_for_stable_dom()
 
@@ -420,6 +425,86 @@ class NavigationOrchestrator:
             await root.locator(field_sel).first.wait_for(state="visible", timeout=8_000)
         except Exception:
             await asyncio.sleep(0.8)
+
+    async def _find_invalid_field_selectors(self, known_fields: list[FormField]) -> list[str]:
+        """
+        Retorna seletores (dentre os campos conhecidos) marcados com aria-invalid='true'.
+
+        Quando o MS Forms rejeita uma página, marca os campos problemáticos com
+        aria-invalid='true'. Se o atributo existe no DOM mas nenhum seletor coincide
+        (ex: erros em containers de radio group), retorna todos os campos como
+        fallback defensivo para garantir que o re-fill seja tentado.
+        """
+        fl = self._page.frame_locator(self._iframe_selector) if self._iframe_selector else None
+        root = fl if fl else self._page
+
+        try:
+            total_invalid = await root.locator("[aria-invalid='true']").count()
+            if total_invalid == 0:
+                return []
+        except Exception:
+            return []
+
+        invalid: list[str] = []
+        for field in known_fields:
+            try:
+                if await root.locator(f"{field.selector}[aria-invalid='true']").count() > 0:
+                    invalid.append(field.selector)
+            except Exception:
+                continue
+
+        # Se há aria-invalid no DOM mas nenhum seletor coincidiu (ex: container de radio),
+        # re-preenche todos os campos da página como fallback defensivo.
+        if not invalid:
+            invalid = [f.selector for f in known_fields]
+
+        return invalid
+
+    async def _advance_past_validation(
+        self,
+        page_num: int,
+        portal_name: str,
+        classified_fields: list[FormField],
+        session: FormSession,
+        filler: FormFiller,
+        max_retries: int = 3,
+    ) -> None:
+        """
+        Verifica se o clique em Avançar gerou erros de validação (aria-invalid='true').
+        Se sim, re-preenche os campos problemáticos e tenta avançar novamente,
+        até max_retries tentativas.
+        """
+        for attempt in range(1, max_retries + 1):
+            await asyncio.sleep(0.5)
+
+            invalid_selectors = await self._find_invalid_field_selectors(classified_fields)
+            if not invalid_selectors:
+                return  # sem erros — a página avançou normalmente
+
+            logger.warning(
+                "validation_error_detected",
+                page=page_num,
+                attempt=attempt,
+                invalid_count=len(invalid_selectors),
+                selectors=invalid_selectors[:10],
+            )
+
+            error_fields = [f for f in classified_fields if f.selector in invalid_selectors]
+            if error_fields:
+                retry_page = FormPage(page_number=page_num, fields=error_fields)
+                await filler.fill_page(retry_page, session)
+                await asyncio.sleep(0.3)
+
+            advanced = await self._click_next(page_num, portal_name)
+            if not advanced:
+                logger.error("next_button_gone_after_validation_retry", page=page_num)
+                return
+
+        logger.error(
+            "validation_retry_exhausted",
+            page=page_num,
+            retries=max_retries,
+        )
 
 
 # ------------------------------------------------------------------

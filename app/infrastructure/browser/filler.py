@@ -82,6 +82,7 @@ class FormFiller:
         failures: list[str] = []
 
         for field in form_page.fields:
+
             value = session.filled_values.get(field.selector)
             if value is None:
                 logger.warning("no_value_for_field", selector=field.selector, semantic=field.semantic_type)
@@ -222,23 +223,28 @@ class FormFiller:
 
     async def _fill_combobox(self, locator: Locator, value: str) -> None:
         """
-        Preenche um combobox React/SPA (role="combobox").
+        Preenche um combobox React/SPA (role="combobox" ou role="button"+aria-haspopup="listbox").
 
         Estratégia:
-        1. Clica no combobox para abrir o dropdown
-        2. Aguarda as opções aparecerem (role="option")
-        3. Encontra a opção cujo texto contém value (ou nome completo da UF)
-        4. Clica na opção
-        5. Fallback: digita o valor (para comboboxes com autocomplete)
+        1. Clica no trigger para abrir o dropdown
+        2. Aguarda role="listbox" ficar visível (pode ser body-level portal)
+        3. Busca opção por aria-label ou textContent (suporta "UF - ESTADO" do MS Forms)
+        4. Fallback: digita o valor se combobox tem autocomplete
         """
         expanded = _UF_TO_NAME.get(value.upper(), value)
         try:
             await locator.click(timeout=self._timeout)
-            await asyncio.sleep(0.3)
 
             page = self._page
-            option_sel = "[role='option']:visible, [role='listitem']:visible, li[role='option']:visible"
-            root_loc = self._fl.locator(option_sel) if self._fl else page.locator(option_sel)
+            # Opções são renderizadas ao nível do body (portal pattern do MS Forms),
+            # fora do iframe — busca sempre via page, nunca via frame_locator.
+            listbox = page.locator("[role='listbox']")
+            try:
+                await listbox.wait_for(state="visible", timeout=3_000)
+            except Exception:
+                await asyncio.sleep(0.3)
+
+            root_loc = page.locator("[role='listbox'] [role='option'], [role='option']:visible")
 
             option_count = await root_loc.count()
             if option_count > 0:
@@ -246,11 +252,15 @@ class FormFiller:
                 exp_lower = expanded.lower()
                 for i in range(option_count):
                     opt = root_loc.nth(i)
+                    aria_label = (await opt.get_attribute("aria-label") or "").lower()
                     text = (await opt.text_content() or "").strip().lower()
-                    if val_lower in text or exp_lower in text or text in val_lower or text in exp_lower:
+                    if (
+                        val_lower in aria_label or val_lower in text
+                        or exp_lower in aria_label or exp_lower in text
+                    ):
                         await opt.click(timeout=self._timeout)
                         return
-                # nenhum match — clica na primeira opção não-placeholder
+                # nenhum match — clica na primeira opção
                 await root_loc.first.click(timeout=self._timeout)
                 return
 

@@ -11,10 +11,12 @@ _FIELD_SELECTOR = (
     "textarea"
 )
 
-# Seletores para comboboxes customizados (React/SPA) — captura dropdowns que não
-# são native <select>, como os usados pelo MS Forms para questões de Dropdown.
+# Seletores para dropdowns customizados (React/SPA) — captura dois padrões:
+# 1. role="combobox" (padrão ARIA combobox)
+# 2. role="button" + aria-haspopup="listbox" (padrão MS Forms — trigger de listbox)
 _COMBOBOX_SELECTOR = (
-    "[role='combobox']:not(input)"
+    "[role='combobox']:not(input),"
+    "[role='button'][aria-haspopup='listbox']"
 )
 
 
