@@ -30,7 +30,7 @@ dev = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["tests"]
+testpaths = ["app/tests"]
 
 [tool.setuptools.packages.find]
 where = ["app"]
