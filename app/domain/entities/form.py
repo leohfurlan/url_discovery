@@ -71,6 +71,14 @@ class FormField(BaseModel):
     semantic_type: SemanticType | None = None
     generated_value: str | None = None
 
+    # --- instrumentação de confiança (Ajuste 4) ---
+    # confidence: "high" | "medium" | "low"
+    # classification_source: como o valor foi decidido — "profile_match",
+    #   "classified", "llm_fallback", "default_no", "human_review_needed",
+    #   "no_matching_options", "checkbox_unselected", "generated_fallback".
+    confidence: str | None = None
+    classification_source: str | None = None
+
     @property
     def semantic_hint(self) -> str:
         parts = [p for p in [self.label, self.name, self.id, self.placeholder] if p]

@@ -10,16 +10,18 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from domain.entities.company_profile import CompanyProfile
 from domain.entities.form import FieldType, FormField, SemanticType
 from domain.services.generator import DataGenerator
 from infrastructure.browser.navigator import NavigationOrchestrator
 
 
-def _orchestrator(classifier) -> NavigationOrchestrator:
+def _orchestrator(classifier, profile: CompanyProfile | None = None) -> NavigationOrchestrator:
     return NavigationOrchestrator(
         page=MagicMock(),
         classifier=classifier,
-        generator=DataGenerator(profile=None),
+        generator=DataGenerator(profile=profile),
+        profile=profile,
     )
 
 
@@ -155,6 +157,48 @@ class TestResolveValueFallback:
 
         assert value  # gerou um CNPJ fake
         classifier.choose_option.assert_not_awaited()
+
+    async def test_tag_llm_fallback_e_human_review(self):
+        orch = _orchestrator(_stub_classifier("Materiais"))
+        field = _radio(["Materiais", "Serviços", "Ambos"])
+        await orch._resolve_value(field)
+        assert field.classification_source == "llm_fallback"
+        assert field.confidence == "medium"
+
+        orch2 = _orchestrator(_stub_classifier(None))
+        field2 = _radio(["PJ", "PF", "MEI"])
+        await orch2._resolve_value(field2)
+        assert field2.classification_source == "human_review_needed"
+        assert field2.confidence == "low"
+
+    async def test_tag_default_no(self):
+        orch = _orchestrator(_stub_classifier(None))
+        field = _radio(["Sim", "Não"], label="A empresa já cometeu crime?")
+        await orch._resolve_value(field)
+        assert field.classification_source == "default_no"
+        assert field.confidence == "low"
+
+    async def test_tag_profile_match(self):
+        profile = CompanyProfile(cnpj="55.232.835/0001-69")
+        orch = _orchestrator(_stub_classifier(None), profile=profile)
+        field = FormField(
+            tag="input", field_type=FieldType.TEXT, label="CNPJ",
+            selector="#cnpj", semantic_type=SemanticType.CNPJ,
+        )
+        value = await orch._resolve_value(field)
+        assert value == "55.232.835/0001-69"
+        assert field.classification_source == "profile_match"
+        assert field.confidence == "high"
+
+    async def test_tag_classified_sem_perfil(self):
+        orch = _orchestrator(_stub_classifier(None))
+        field = FormField(
+            tag="input", field_type=FieldType.TEXT, label="CNPJ",
+            selector="#cnpj", semantic_type=SemanticType.CNPJ,
+        )
+        await orch._resolve_value(field)
+        assert field.classification_source == "classified"
+        assert field.confidence == "high"
 
     async def test_unknown_radio_com_duas_opcoes_nao_binarias_nao_dispara(self):
         # <=2 opções: não há ambiguidade suficiente para gastar uma chamada de LLM;

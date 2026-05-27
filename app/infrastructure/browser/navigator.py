@@ -85,6 +85,12 @@ _LARGE_CHECKBOX_THRESHOLD = 10
 # Extrai o texto da opção do seletor de checkbox: ...[value="OPÇÃO"]
 _CHECKBOX_VALUE_RE = re.compile(r'\[value="(.*)"\]\s*$')
 
+
+def _tag(field: FormField, source: str, confidence: str) -> None:
+    """Anota origem e confiança da decisão de preenchimento (Ajuste 4)."""
+    field.classification_source = source
+    field.confidence = confidence
+
 # Indicadores de sucesso/conclusão na página
 _SUCCESS_INDICATORS = [
     "sucesso",
@@ -166,10 +172,13 @@ class NavigationOrchestrator:
         self._screenshot_dir = screenshot_dir
         self._slow_fill = slow_fill
         self._allow_submit = allow_submit
+        self._profile = profile
         self._profile_summary = profile.summary() if profile else ""
         self._on_page_done = on_page_done
         # Campos sem preenchimento seguro, acumulados ao longo da execução.
         self._review_queue: list[FormField] = []
+        # Todos os campos classificados, para o sumário de confiança (Ajuste 4).
+        self._all_classified: list[FormField] = []
 
     # ------------------------------------------------------------------
     # API pública
@@ -224,6 +233,7 @@ class NavigationOrchestrator:
                     filler=filler,
                 )
                 form_page.fields = classified_fields
+                self._all_classified.extend(classified_fields)
 
                 # 5. Screenshot
                 screenshot_path = await filler.take_screenshot(
@@ -296,7 +306,32 @@ class NavigationOrchestrator:
         report.final_url = self._page.url
         report.session = session
         report.requires_human_review = list(self._review_queue)
+        self._log_confidence_summary()
         return report
+
+    def _log_confidence_summary(self) -> None:
+        """Emite o sumário de auditoria ao final da execução (Ajuste 4):
+        total de campos, distribuição de confiança/origem e campos que precisam
+        de revisão humana."""
+        from collections import Counter
+
+        fields = self._all_classified
+        confidence = Counter((f.confidence or "untagged") for f in fields)
+        sources = Counter((f.classification_source or "untagged") for f in fields)
+
+        logger.info(
+            "run_summary",
+            total_fields=len(fields),
+            confidence=dict(confidence),
+            sources=dict(sources),
+            requires_human_review=len(self._review_queue),
+        )
+        for f in self._review_queue:
+            logger.info(
+                "review_item",
+                selector=f.selector,
+                label=(f.label or "")[:80] or None,
+            )
 
     # ------------------------------------------------------------------
     # Helpers
@@ -395,6 +430,12 @@ class NavigationOrchestrator:
             chosen_set = {i for i in chosen if 0 <= i < len(group)}
 
             for i, f in enumerate(group):
+                if i in chosen_set:
+                    _tag(f, "llm_fallback", "medium")
+                elif chosen_set:
+                    _tag(f, "checkbox_unselected", "high")
+                else:
+                    _tag(f, "no_matching_options", "low")
                 if f.selector not in session.filled_values:
                     session.filled_values[f.selector] = "true" if i in chosen_set else "false"
 
@@ -430,6 +471,7 @@ class NavigationOrchestrator:
         if is_unknown and is_choice and len(field.options) > 2 and not _is_binary_yes_no(field):
             choice = await self._classifier.choose_option(field, self._profile_summary)
             if choice:
+                _tag(field, "llm_fallback", "medium")
                 logger.info(
                     "llm_fallback_resolved",
                     selector=field.selector,
@@ -437,6 +479,7 @@ class NavigationOrchestrator:
                     choice=str(choice)[:60],
                 )
                 return choice
+            _tag(field, "human_review_needed", "low")
             self._review_queue.append(field)
             logger.warning(
                 "human_review_needed",
@@ -448,13 +491,23 @@ class NavigationOrchestrator:
             return None
 
         if is_unknown and field.field_type == FieldType.RADIO and _is_binary_yes_no(field):
+            _tag(field, "default_no", "low")
             logger.info(
                 "field_default_no",
                 selector=field.selector,
                 label=(field.label or "")[:60] or None,
             )
+            return self._generator.generate(st, field=field)
 
-        return self._generator.generate(st, field=field)
+        # Caminho normal: distingue dado real do perfil de dado gerado/fake.
+        value = self._generator.generate(st, field=field)
+        if self._profile is not None and self._profile.get(st):
+            _tag(field, "profile_match", "high")
+        elif is_unknown:
+            _tag(field, "generated_fallback", "low")
+        else:
+            _tag(field, "classified", "high")
+        return value
 
     async def _fill_until_stable(
         self,

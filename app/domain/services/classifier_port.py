@@ -136,13 +136,17 @@ class ClassifierPort(ABC):
                 )
 
             classified_snapshot = classified.model_dump()
+            # semantic_type é o resultado da classificação; confidence e
+            # classification_source são instrumentação preenchida depois (Ajuste 4)
+            # e também podem divergir do snapshot original.
+            mutable_keys = {"semantic_type", "confidence", "classification_source"}
             original_without_semantics = {
-                key: value for key, value in original.items() if key != "semantic_type"
+                key: value for key, value in original.items() if key not in mutable_keys
             }
             classified_without_semantics = {
                 key: value
                 for key, value in classified_snapshot.items()
-                if key != "semantic_type"
+                if key not in mutable_keys
             }
 
             if classified_without_semantics != original_without_semantics:

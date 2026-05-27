@@ -276,6 +276,15 @@ def _print_report(report, portal: str) -> None:
         )
         if step.screenshot:
             typer.echo(f"           screenshot: {step.screenshot}")
+
+    review = getattr(report, "requires_human_review", [])
+    if review:
+        typer.echo("-" * width)
+        typer.echo(f"  ⚑ Revisão humana sugerida ({len(review)}):")
+        for f in review:
+            label = (f.label or f.selector)[:60]
+            typer.echo(f"      - {label}")
+
     if report.error:
         typer.echo(f"  Erro: {report.error}", err=True)
     typer.echo("=" * width + "\n")

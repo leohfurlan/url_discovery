@@ -102,6 +102,8 @@ class FormFiller:
                     selector=field.selector,
                     field_type=field.field_type,
                     semantic=field.semantic_type,
+                    confidence=field.confidence,
+                    classification_source=field.classification_source,
                     label=(field.label or "")[:60] or None,
                     value=str(value)[:80] if value is not None else None,
                 )
