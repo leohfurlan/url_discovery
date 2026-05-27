@@ -51,6 +51,9 @@ blob-report/
 *_formulario.png
 screenshots/
 
+# Artefatos de auditoria (logs + screenshots por execução — saídas locais)
+audit/
+
 # Logs e arquivos temporarios
 *.log
 *.tmp

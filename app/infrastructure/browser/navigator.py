@@ -29,6 +29,7 @@ from domain.entities.form import (
 )
 from domain.services.classifier_port import ClassifierPort
 from domain.services.generator import DataGenerator
+from infrastructure.audit.audit_session import AuditSession
 from infrastructure.browser.crawler import DOMCrawler
 from infrastructure.browser.filler import FormFiller, _UF_TO_NAME
 from infrastructure.llm.heuristic import _is_binary_yes_no
@@ -182,7 +183,8 @@ class NavigationOrchestrator:
         generator       — DataGenerator instanciado
         iframe_selector — seletor CSS do iframe, se houver (ex: "#form-frame")
         max_pages       — limite de segurança para evitar loops infinitos
-        screenshot_dir  — diretório onde salvar screenshots (None = /tmp)
+        audit           — AuditSession para salvar logs+screenshots (None = só /tmp)
+        per_question_shots — quando True, gera 1 screenshot por pergunta preenchida
         slow_fill       — delay extra entre campos (portais sensíveis a timing)
         on_page_done    — callback opcional chamado após cada página preenchida
     """
@@ -194,7 +196,8 @@ class NavigationOrchestrator:
         generator: DataGenerator,
         iframe_selector: str | None = None,
         max_pages: int = 15,
-        screenshot_dir: str | None = None,
+        audit: AuditSession | None = None,
+        per_question_shots: bool = True,
         slow_fill: bool = False,
         allow_submit: bool = False,
         profile: CompanyProfile | None = None,
@@ -205,7 +208,8 @@ class NavigationOrchestrator:
         self._generator = generator
         self._iframe_selector = iframe_selector
         self._max_pages = max_pages
-        self._screenshot_dir = screenshot_dir
+        self._audit = audit
+        self._per_question_shots = per_question_shots
         self._slow_fill = slow_fill
         self._allow_submit = allow_submit
         self._profile = profile
@@ -291,9 +295,10 @@ class NavigationOrchestrator:
                 form_page.fields = classified_fields
                 self._all_classified.extend(classified_fields)
 
-                # 5. Screenshot
-                screenshot_path = await filler.take_screenshot(
-                    f"{portal_name}_page_{page_num}"
+                # 5. Screenshots de auditoria — visão geral da página + 1 por
+                #    pergunta preenchida (cobertura de 100% das questões).
+                screenshot_path = await self._capture_page_audit(
+                    page_num, portal_name, classified_fields, failures, session, filler
                 )
 
                 step = StepReport(
@@ -304,7 +309,6 @@ class NavigationOrchestrator:
                     screenshot=str(screenshot_path),
                 )
                 report.steps.append(step)
-                session.screenshots.append(str(screenshot_path))
 
                 if self._on_page_done:
                     await self._on_page_done(step)
@@ -363,7 +367,77 @@ class NavigationOrchestrator:
         report.session = session
         report.requires_human_review = list(self._review_queue)
         self._log_confidence_summary()
+
+        # Consolida o índice de evidências (manifest.json + README.md) na pasta
+        # de auditoria do portal — junto dos screenshots e do log da sessão.
+        if self._audit is not None:
+            try:
+                self._audit.write_manifest(
+                    result=report.result.name, final_url=report.final_url
+                )
+            except Exception as exc:
+                logger.warning("audit_manifest_error", error=str(exc))
+
         return report
+
+    async def _capture_page_audit(
+        self,
+        page_num: int,
+        portal_name: str,
+        fields: list[FormField],
+        failures: list[str],
+        session: FormSession,
+        filler: FormFiller,
+    ) -> str:
+        """Captura as evidências visuais de uma página já preenchida.
+
+        Sempre tira a visão geral (full page). Quando há AuditSession e
+        per_question_shots está ligado, tira também 1 screenshot por pergunta
+        preenchida, garantindo cobertura total das questões respondidas.
+
+        Retorna o caminho do screenshot de visão geral (para o StepReport).
+        """
+        # ── Visão geral da página ───────────────────────────────────────────
+        if self._audit is not None:
+            overview = self._audit.overview_path(page_num)
+            await filler.take_screenshot(dest=overview)
+            self._audit.record_page(page_num, overview, url=self._page.url)
+        else:
+            overview = await filler.take_screenshot(f"{portal_name}_page_{page_num}")
+        session.screenshots.append(str(overview))
+
+        if self._audit is None or not self._per_question_shots:
+            return str(overview)
+
+        # ── Um screenshot por pergunta preenchida ───────────────────────────
+        failed = set(failures)
+        seen_groups: set[str] = set()
+        q_index = 0
+        for f in fields:
+            # Só registra perguntas que de fato receberam valor e não falharam.
+            if f.selector not in session.filled_values or f.selector in failed:
+                continue
+            # Grupos de radio/checkbox compartilham `name` — uma evidência por
+            # grupo (senão um grupo de 183 checkboxes geraria 183 prints).
+            if f.field_type in (FieldType.RADIO, FieldType.CHECKBOX) and f.name:
+                group_key = f"{f.field_type}:{f.name}"
+            else:
+                group_key = f.selector
+            if group_key in seen_groups:
+                continue
+            seen_groups.add(group_key)
+
+            q_index += 1
+            qpath = self._audit.question_path(page_num, q_index, self._audit.slug_for(f))
+            ok = await filler.screenshot_field(f, qpath)
+            self._audit.record_question(
+                page_num, q_index, f, session.filled_values.get(f.selector), qpath, ok
+            )
+            if ok:
+                session.screenshots.append(str(qpath))
+
+        logger.info("page_audit_captured", page=page_num, questions=q_index)
+        return str(overview)
 
     def _log_confidence_summary(self) -> None:
         """Emite o sumário de auditoria ao final da execução (Ajuste 4):

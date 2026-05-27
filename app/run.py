@@ -21,7 +21,6 @@ import asyncio
 import logging
 import os
 import sys
-from datetime import datetime
 from pathlib import Path
 
 import structlog
@@ -37,8 +36,7 @@ if str(_APP_DIR) not in sys.path:
 
 logger = structlog.get_logger(__name__)
 
-# Diretório padrão para logs de sessão (relativo à raiz do projeto).
-_LOG_DIR = _APP_DIR.parent / "logs"
+from infrastructure.audit.audit_session import AuditSession  # noqa: E402
 
 
 def _configure_logging(log_file: Path | None) -> None:
@@ -96,7 +94,8 @@ def main(
     slow_fill: bool = typer.Option(False, "--slow-fill", help="Delay extra entre campos (portais sensíveis a timing)"),
     max_pages: int = typer.Option(15, "--max-pages", help="Limite de páginas do formulário"),
     iframe: str | None = typer.Option(None, "--iframe", help="Seletor CSS do iframe, se já conhecido (pula a discovery)"),
-    screenshot_dir: str | None = typer.Option(None, "--screenshots", help="Diretório para salvar screenshots (padrão: /tmp)"),
+    audit_dir: Path | None = typer.Option(None, "--audit-dir", help="Raiz dos artefatos de auditoria (padrão: ./audit). Logs e screenshots vão para <audit-dir>/<portal>/<timestamp>/"),
+    per_question_shots: bool = typer.Option(True, "--per-question-shots/--no-per-question-shots", help="Tira 1 screenshot por pergunta preenchida (cobertura 100%). Padrão: ativado"),
     model: str = typer.Option("gemma-4-26b-a4b-it", "--model", help="Modelo Gemma para classificação semântica e extração de documentos"),
     docs_dir: Path | None = typer.Option(None, "--docs-dir", help="Diretório com PDFs reais (Cartão CNPJ, Contrato Social, Demonstrações Financeiras)"),
     supplier_kind: str | None = typer.Option(None, "--supplier-kind", help="Tipo de fornecimento: materiais | servicos | ambos (ajuda na classificação de fornecedor e categorias)"),
@@ -113,16 +112,18 @@ def main(
     mas NÃO clica em Submit. Use --submit ou ALLOW_FORM_SUBMIT=true apenas
     em produção, após validar os dados gerados para o portal.
     """
+    # Sessão de auditoria: logs e screenshots desta execução ficam juntos em
+    # <audit-dir>/<portal>/<timestamp>/ (ex: audit/jaguar-mining/20260527_143000/).
+    audit = AuditSession(portal=portal, base_dir=audit_dir)
+    audit.setup()
+
     # Configura logging ANTES de qualquer log estruturado para garantir que
     # o arquivo recebe a sessão inteira (incluindo as mensagens de setup).
     resolved_log_path: Path | None = None
     if log_file:
-        if log_file_path is not None:
-            resolved_log_path = log_file_path
-        else:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            resolved_log_path = _LOG_DIR / f"{portal}_{timestamp}.log"
+        resolved_log_path = log_file_path if log_file_path is not None else audit.log_path
     _configure_logging(resolved_log_path)
+    typer.echo(f"→ Auditoria desta execução: {audit.root}")
     if resolved_log_path is not None:
         typer.echo(f"→ Log da sessão será salvo em: {resolved_log_path}")
 
@@ -150,9 +151,9 @@ def main(
 
     try:
         report = asyncio.run(
-            _run(url, portal, headless, slow_fill, max_pages, iframe, screenshot_dir, model, allow_submit, docs_dir, no_cache, supplier_kind, supplier_desc)
+            _run(url, portal, headless, slow_fill, max_pages, iframe, audit, per_question_shots, model, allow_submit, docs_dir, no_cache, supplier_kind, supplier_desc)
         )
-        _print_report(report, portal)
+        _print_report(report, portal, audit)
         raise typer.Exit(code=0 if report.result.name == "SUCCESS" else 1)
     except (KeyboardInterrupt, typer.Exit):
         raise
@@ -199,7 +200,8 @@ async def _run(
     slow_fill: bool,
     max_pages: int,
     iframe_selector: str | None,
-    screenshot_dir: str | None,
+    audit: AuditSession,
+    per_question_shots: bool,
     model: str,
     allow_submit: bool,
     docs_dir: Path | None = None,
@@ -282,7 +284,8 @@ async def _run(
             iframe_selector=active_iframe,
             slow_fill=slow_fill,
             max_pages=max_pages,
-            screenshot_dir=screenshot_dir,
+            audit=audit,
+            per_question_shots=per_question_shots,
             allow_submit=allow_submit,
             profile=profile,
         )
@@ -315,13 +318,17 @@ def _check_minimum_fields(profile) -> None:
         typer.echo("✓  Todos os campos essenciais extraídos dos documentos.")
 
 
-def _print_report(report, portal: str) -> None:
+def _print_report(report, portal: str, audit: AuditSession | None = None) -> None:
     width = 52
     typer.echo("\n" + "=" * width)
     typer.echo(f"  Portal : {portal}")
     typer.echo(f"  Resultado : {report.result.name}")
     typer.echo(f"  URL final : {report.final_url}")
     typer.echo(f"  Páginas   : {len(report.steps)}")
+    if audit is not None:
+        typer.echo(f"  Auditoria : {audit.root}")
+        n_shots = len(report.session.screenshots) if report.session else 0
+        typer.echo(f"  Screenshots: {n_shots}  (veja README.md / manifest.json)")
     typer.echo("-" * width)
     for step in report.steps:
         mark = "✓" if not step.failures else "⚠"
