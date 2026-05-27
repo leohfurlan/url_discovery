@@ -51,8 +51,9 @@ blob-report/
 *_formulario.png
 screenshots/
 
-# Artefatos de auditoria (logs + screenshots por execução — saídas locais)
-audit/
+# Artefatos de auditoria (logs + screenshots por execução — saídas locais).
+# Ancorado na raiz para não ignorar o módulo app/infrastructure/audit/.
+/audit/
 
 # Logs e arquivos temporarios
 *.log
