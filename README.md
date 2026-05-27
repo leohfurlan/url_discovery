@@ -112,9 +112,13 @@ python app\run.py --help
 | `--per-question-shots` / `--no-per-question-shots` | `True` | Tira 1 screenshot por pergunta preenchida (cobertura 100%) |
 | `--model` | `gemma-4-26b-a4b-it` | Modelo Gemma para classificação e extração de documentos |
 | `--docs-dir` | — | Diretório com PDFs reais da empresa — extrai antes de abrir o browser |
+| `--supplier-kind` | — | Tipo de fornecimento: `materiais` \| `servicos` \| `ambos` |
+| `--supplier-desc` | — | Descrição curta do que a empresa fornece |
 | `--no-cache` | `False` | Força reprocessamento dos PDFs mesmo que cache esteja disponível |
 | `--clear-cls-cache` | `False` | Limpa o cache de classificação semântica (`~/.url_discovery/cls_cache.json`) |
 | `--submit` / `--no-submit` | env | Sobrescreve `ALLOW_FORM_SUBMIT` do `.env` |
+| `--log-file` / `--no-log-file` | `True` | Salva o log da sessão em `audit/<portal>/<timestamp>/session.log` |
+| `--log-file-path` | — | Caminho customizado para o log (sobrescreve o padrão) |
 
 ### Usando dados reais da empresa
 
@@ -150,6 +154,22 @@ O agente detecta automaticamente o tipo de cada documento:
 **E-mail de contato:** extraído do campo "ENDEREÇO ELETRÔNICO" do Cartão CNPJ. Caso o documento não contenha esse campo, defina `COMPANY_EMAIL` no `.env` como fallback.
 
 **Fallback automático:** campos ausentes nos documentos são preenchidos com Faker — transparente, sem erro.
+
+### Contexto de fornecedor
+
+O CNAE sozinho nem sempre basta para o agente decidir campos como "Classificação de Fornecedor" ou marcar as categorias/serviços corretos numa lista de opções. As flags opcionais `--supplier-kind` e `--supplier-desc` dão esse contexto à IA:
+
+```powershell
+python app\run.py "https://portal.example.com" empresa `
+  --docs-dir ./docs `
+  --supplier-kind materiais `
+  --supplier-desc "Mangueiras hidráulicas e conexões industriais"
+```
+
+- `--supplier-kind` aceita `materiais`, `servicos` ou `ambos` (sinônimos como `produtos`, `serviço` são normalizados).
+- `--supplier-desc` é texto livre — uma frase curta sobre o que a empresa fornece.
+
+São **totalmente opcionais e sem prompt interativo**: se omitidas, o agente roda sem esse contexto (a correção ciente das opções do campo continua funcionando). Quando informadas, são anexadas ao `CompanyProfile` e entram no resumo enviado ao LLM nas decisões de fallback.
 
 ### Exemplos com controle de submissão
 

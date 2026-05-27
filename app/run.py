@@ -103,7 +103,7 @@ def main(
     no_cache: bool = typer.Option(False, "--no-cache", help="Força reprocessamento dos PDFs mesmo que cache esteja disponível"),
     clear_cls_cache: bool = typer.Option(False, "--clear-cls-cache", help="Limpa o cache de classificação semântica (~/.url_discovery/cls_cache.json) antes de iniciar"),
     submit: bool = typer.Option(None, "--submit/--no-submit", help="Submete o formulário após preencher (sobrescreve ALLOW_FORM_SUBMIT do .env)"),
-    log_file: bool = typer.Option(True, "--log-file/--no-log-file", help="Salva log da sessão em logs/<portal>_<timestamp>.log (padrão: ativado)"),
+    log_file: bool = typer.Option(True, "--log-file/--no-log-file", help="Salva log da sessão em audit/<portal>/<timestamp>/session.log (padrão: ativado)"),
     log_file_path: Path | None = typer.Option(None, "--log-file-path", help="Caminho customizado para o log (sobrescreve o padrão)"),
 ) -> None:
     """Descobre e preenche automaticamente o formulário de cadastro de fornecedor.
