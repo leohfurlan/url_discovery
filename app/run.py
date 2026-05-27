@@ -146,7 +146,7 @@ def main(
         else:
             typer.echo("→ Cache de classificação não encontrado (já estava limpo).")
 
-    supplier_kind, supplier_desc = _collect_supplier_info(supplier_kind, supplier_desc, headless)
+    supplier_kind, supplier_desc = _collect_supplier_info(supplier_kind, supplier_desc)
 
     try:
         report = asyncio.run(
@@ -176,28 +176,17 @@ def _normalize_supplier_kind(value: str | None) -> str | None:
 
 
 def _collect_supplier_info(
-    supplier_kind: str | None, supplier_desc: str | None, headless: bool
+    supplier_kind: str | None, supplier_desc: str | None
 ) -> tuple[str | None, str | None]:
-    """Resolve o tipo de fornecedor e a descrição: usa as flags se vierem; senão,
-    pergunta ao usuário — mas só em terminal interativo (nunca em --headless ou
-    sem TTY, para não travar execuções automatizadas/agendadas)."""
-    interactive = sys.stdin.isatty() and not headless
+    """Normaliza o contexto de fornecedor vindo das flags --supplier-kind/--supplier-desc.
 
-    if supplier_kind is None and interactive:
-        supplier_kind = typer.prompt(
-            "A empresa fornece materiais, serviços ou ambos? [materiais/servicos/ambos]",
-            default="ambos",
-        )
+    É totalmente opcional: se as flags não forem passadas, o agente roda sem esse
+    contexto e sem nenhum prompt — não interrompe execuções manuais nem agendadas.
+    Quando informado, melhora a escolha de "Classificação de Fornecedor" e a
+    seleção de categorias/serviços (a correção ciente das opções funciona mesmo
+    sem ele)."""
     supplier_kind = _normalize_supplier_kind(supplier_kind)
-
-    if supplier_desc is None and interactive:
-        supplier_desc = typer.prompt(
-            "Descreva brevemente o que a empresa fornece (Enter para pular)",
-            default="",
-            show_default=False,
-        )
     supplier_desc = (supplier_desc or "").strip() or None
-
     if supplier_kind or supplier_desc:
         typer.echo(f"→ Fornecedor: tipo={supplier_kind or '—'} | descrição={supplier_desc or '—'}")
     return supplier_kind, supplier_desc

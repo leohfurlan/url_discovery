@@ -30,16 +30,16 @@ class TestNormalizeSupplierKind:
 
 class TestCollectSupplierInfo:
     def test_flags_fornecidas_sao_normalizadas(self):
-        kind, desc = _collect_supplier_info("Materiais", "  Bombas e válvulas ", headless=True)
+        kind, desc = _collect_supplier_info("Materiais", "  Bombas e válvulas ")
         assert kind == "materiais"
         assert desc == "Bombas e válvulas"
 
-    def test_headless_sem_flags_nao_pergunta(self):
-        # Em headless não há prompt — segue sem inventar valores.
-        kind, desc = _collect_supplier_info(None, None, headless=True)
+    def test_sem_flags_retorna_none_sem_prompt(self):
+        # Sem flags o agente segue sem contexto e sem perguntar nada.
+        kind, desc = _collect_supplier_info(None, None)
         assert kind is None and desc is None
 
     def test_descricao_vazia_vira_none(self):
-        kind, desc = _collect_supplier_info("servicos", "   ", headless=True)
+        kind, desc = _collect_supplier_info("servicos", "   ")
         assert kind == "serviços"
         assert desc is None
