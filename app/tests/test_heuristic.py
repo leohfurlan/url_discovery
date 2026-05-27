@@ -50,6 +50,15 @@ class TestBinarioSimNao:
         field = _radio("Concordo com os termos e condições", ["Sim", "Não"])
         assert heuristic_classify(field) == SemanticType.ACEITE_TERMOS
 
+    def test_pergunta_compliance_com_ciente_nao_vira_aceite(self):
+        # Pergunta 9 do log: "Você está ciente de alguma questão de relacionamento
+        # que possa gerar conflito?" NÃO é um aceite — marcar "Sim" seria perigoso.
+        field = _radio(
+            "Você está ciente de alguma questão de relacionamento que possa gerar conflito de interesses?",
+            ["Sim", "Não"],
+        )
+        assert heuristic_classify(field) == SemanticType.UNKNOWN
+
     def test_is_binary_yes_no(self):
         assert _is_binary_yes_no(_radio("x", ["Sim", "Não"]))
         assert _is_binary_yes_no(_radio("x", ["yes", "no"]))

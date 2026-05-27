@@ -110,8 +110,16 @@ _BINARY_YES_NO_OPTION_SETS: tuple[frozenset[str], ...] = (
 # por isso tem prioridade sobre keywords como "agência" ou "representante
 # legal" que aparecem no meio da pergunta (ex.: "Declaro estar ciente, na
 # condição de representante legal, que...").
+#
+# IMPORTANTE: só verbos de compromisso em PRIMEIRA PESSOA (declaro, aceito,
+# concordo, autorizo, consinto) e termos de consentimento. NÃO inclui "ciente"
+# isolado: ele é ambíguo — aparece tanto em declaração ("Declaro estar ciente")
+# quanto em pergunta de compliance ("Você está ciente de ALGUMA questão...?"),
+# onde marcar "Sim" seria perigoso. A Q4 ("Declaro estar ciente...") continua
+# casando por "declaro"; a Q9 ("Você está ciente de alguma questão...") cai como
+# binário → UNKNOWN → "Não".
 _ACEITE_PATTERN = re.compile(
-    r'\b(concord[oa]|aceit[oa]|declaro|declara[cç][aã]o|ciente|consinto|'
+    r'\b(concord[oa]|aceit[oa]|declaro|declara[cç][aã]o|consinto|'
     r'consentimento|autorizo|termos\s+e\s+condi[cç][oõ]es)\b',
     re.I,
 )
