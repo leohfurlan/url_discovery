@@ -125,6 +125,27 @@ class TestMerge:
         assert merged.conta is None
 
 
+class TestSummary:
+    def test_summary_lista_campos_preenchidos(self):
+        p = CompanyProfile(cnpj="12.345.678/0001-99", razao_social="ACME")
+        s = p.summary()
+        assert "12.345.678/0001-99" in s and "ACME" in s
+
+    def test_summary_inclui_contexto_de_fornecedor(self):
+        p = CompanyProfile(
+            supplier_kind="ambos",
+            supplier_description="Locação de equipamentos e manutenção industrial",
+        )
+        s = p.summary()
+        assert "ambos" in s
+        assert "manutenção industrial" in s
+
+    def test_supplier_kind_nao_e_mapeado_para_semantic(self):
+        # supplier_* não deve casar com nenhum SemanticType (evita profile_match falso)
+        p = CompanyProfile(supplier_kind="materiais")
+        assert p.get(SemanticType.ATIVIDADE) is None
+
+
 class TestIsEmpty:
     def test_perfil_vazio_retorna_true(self):
         assert CompanyProfile().is_empty() is True

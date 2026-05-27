@@ -99,6 +99,8 @@ def main(
     screenshot_dir: str | None = typer.Option(None, "--screenshots", help="Diretório para salvar screenshots (padrão: /tmp)"),
     model: str = typer.Option("gemma-4-26b-a4b-it", "--model", help="Modelo Gemma para classificação semântica e extração de documentos"),
     docs_dir: Path | None = typer.Option(None, "--docs-dir", help="Diretório com PDFs reais (Cartão CNPJ, Contrato Social, Demonstrações Financeiras)"),
+    supplier_kind: str | None = typer.Option(None, "--supplier-kind", help="Tipo de fornecimento: materiais | servicos | ambos (ajuda na classificação de fornecedor e categorias)"),
+    supplier_desc: str | None = typer.Option(None, "--supplier-desc", help="Descrição curta do que a empresa fornece"),
     no_cache: bool = typer.Option(False, "--no-cache", help="Força reprocessamento dos PDFs mesmo que cache esteja disponível"),
     clear_cls_cache: bool = typer.Option(False, "--clear-cls-cache", help="Limpa o cache de classificação semântica (~/.url_discovery/cls_cache.json) antes de iniciar"),
     submit: bool = typer.Option(None, "--submit/--no-submit", help="Submete o formulário após preencher (sobrescreve ALLOW_FORM_SUBMIT do .env)"),
@@ -144,9 +146,11 @@ def main(
         else:
             typer.echo("→ Cache de classificação não encontrado (já estava limpo).")
 
+    supplier_kind, supplier_desc = _collect_supplier_info(supplier_kind, supplier_desc, headless)
+
     try:
         report = asyncio.run(
-            _run(url, portal, headless, slow_fill, max_pages, iframe, screenshot_dir, model, allow_submit, docs_dir, no_cache)
+            _run(url, portal, headless, slow_fill, max_pages, iframe, screenshot_dir, model, allow_submit, docs_dir, no_cache, supplier_kind, supplier_desc)
         )
         _print_report(report, portal)
         raise typer.Exit(code=0 if report.result.name == "SUCCESS" else 1)
@@ -155,6 +159,48 @@ def main(
     except Exception as exc:
         typer.echo(f"\nErro fatal: {exc}", err=True)
         raise typer.Exit(code=1)
+
+
+_SUPPLIER_KINDS = {
+    "materiais": "materiais", "material": "materiais", "produtos": "materiais",
+    "servicos": "serviços", "serviços": "serviços", "serviço": "serviços", "servico": "serviços",
+    "ambos": "ambos", "materiais e servicos": "ambos", "materiais e serviços": "ambos",
+}
+
+
+def _normalize_supplier_kind(value: str | None) -> str | None:
+    """Normaliza a entrada do tipo de fornecedor para materiais|serviços|ambos."""
+    if not value:
+        return None
+    return _SUPPLIER_KINDS.get(value.strip().lower(), value.strip())
+
+
+def _collect_supplier_info(
+    supplier_kind: str | None, supplier_desc: str | None, headless: bool
+) -> tuple[str | None, str | None]:
+    """Resolve o tipo de fornecedor e a descrição: usa as flags se vierem; senão,
+    pergunta ao usuário — mas só em terminal interativo (nunca em --headless ou
+    sem TTY, para não travar execuções automatizadas/agendadas)."""
+    interactive = sys.stdin.isatty() and not headless
+
+    if supplier_kind is None and interactive:
+        supplier_kind = typer.prompt(
+            "A empresa fornece materiais, serviços ou ambos? [materiais/servicos/ambos]",
+            default="ambos",
+        )
+    supplier_kind = _normalize_supplier_kind(supplier_kind)
+
+    if supplier_desc is None and interactive:
+        supplier_desc = typer.prompt(
+            "Descreva brevemente o que a empresa fornece (Enter para pular)",
+            default="",
+            show_default=False,
+        )
+    supplier_desc = (supplier_desc or "").strip() or None
+
+    if supplier_kind or supplier_desc:
+        typer.echo(f"→ Fornecedor: tipo={supplier_kind or '—'} | descrição={supplier_desc or '—'}")
+    return supplier_kind, supplier_desc
 
 
 async def _run(
@@ -169,8 +215,11 @@ async def _run(
     allow_submit: bool,
     docs_dir: Path | None = None,
     no_cache: bool = False,
+    supplier_kind: str | None = None,
+    supplier_desc: str | None = None,
 ):
     from playwright.async_api import async_playwright
+    from domain.entities.company_profile import CompanyProfile
     from infrastructure.llm.gemma_adapter import GemmaClassifier
     from domain.services.generator import DataGenerator
     from domain.services.document_extractor import DocumentExtractor
@@ -193,6 +242,17 @@ async def _run(
             else:
                 typer.echo(f"→ Perfil carregado: {profile.razao_social or '—'} / CNPJ: {profile.cnpj or '—'}")
                 _check_minimum_fields(profile)
+
+    # Anexa o contexto de fornecedor informado pelo usuário ao perfil (não vem
+    # de PDF). Cria um perfil mínimo se não houver documentos — assim o
+    # profile_summary chega ao LLM mesmo sem --docs-dir.
+    if supplier_kind or supplier_desc:
+        if profile is None:
+            profile = CompanyProfile()
+        profile = profile.model_copy(update={
+            "supplier_kind": supplier_kind,
+            "supplier_description": supplier_desc,
+        })
 
     # ── 2. Navegação e preenchimento ──────────────────────────────────────────
     async with async_playwright() as p:

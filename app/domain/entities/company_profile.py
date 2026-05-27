@@ -72,6 +72,12 @@ class CompanyProfile(BaseModel):
     faturamento_anual:  str | None = None
     periodo_referencia: str | None = None
 
+    # ── Contexto informado pelo usuário (não vem de PDF) ──────────────────────
+    # Ajuda o LLM a decidir "Classificação de Fornecedor" e a seleção de
+    # categorias/serviços, que o CNAE sozinho não cobre bem.
+    supplier_kind:        str | None = None   # "materiais" | "servicos" | "ambos"
+    supplier_description: str | None = None   # descrição curta do que a empresa fornece
+
     def get(self, semantic_type: object) -> str | None:
         """Retorna o valor real para um SemanticType, ou None se não disponível."""
         key = semantic_type.value if hasattr(semantic_type, "value") else str(semantic_type)
