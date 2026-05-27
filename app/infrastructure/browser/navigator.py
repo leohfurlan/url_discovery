@@ -77,10 +77,13 @@ _NEXT_BUTTON_SELECTORS = [
     '[class*="submit"]',
 ]
 
-# Acima deste número de opções, um grupo de checkboxes deixa de ser classificado
-# item a item (que marcava tudo com o mesmo semantic) e passa a uma seleção única
-# via LLM com base na atividade da empresa (Ajuste 3).
-_LARGE_CHECKBOX_THRESHOLD = 10
+# Grupos de checkbox com 2+ opções ("selecione todas que se aplicam": documentos,
+# categorias, serviços) deixam de ser classificados item a item — o que marcava
+# tudo com o mesmo semantic OU não marcava nada (deixando obrigatórios vazios e
+# travando o form) — e passam a uma seleção única via LLM com base no perfil.
+# Checkbox isolado (grupo de 1, ex.: "Concordo com os termos") segue no caminho
+# normal de aceite.
+_CHECKBOX_GROUP_MIN = 2
 
 # Extrai o texto da opção do seletor de checkbox: ...[value="OPÇÃO"]
 _CHECKBOX_VALUE_RE = re.compile(r'\[value="(.*)"\]\s*$')
@@ -405,13 +408,13 @@ class NavigationOrchestrator:
     async def _resolve_large_checkbox_groups(
         self, fields: list[FormField], session: FormSession
     ) -> None:
-        """Trata grupos grandes de checkbox (>N opções) com uma única seleção via LLM.
+        """Trata grupos de checkbox (2+ opções) com uma única seleção via LLM.
 
-        Sem isso, cada opção era classificada como atividade_empresa e marcada com
-        o mesmo CNAE — a empresa acabava se candidatando a fornecer tudo. Aqui o
-        LLM escolhe no máximo 3 opções compatíveis com a atividade; as demais são
-        explicitamente desmarcadas. Pré-preenche session.filled_values para que o
-        loop campo a campo não reprocesse essas opções.
+        Sem isso, cada opção era classificada isoladamente — ou marcava tudo com o
+        mesmo CNAE (a empresa fornecia "tudo"), ou não marcava nada (deixando um
+        obrigatório vazio e travando o form). Aqui o LLM escolhe no máximo 3 opções
+        aplicáveis ao perfil; as demais são explicitamente desmarcadas. Pré-preenche
+        session.filled_values para que o loop campo a campo não reprocesse o grupo.
         """
         groups: dict[str, list[FormField]] = {}
         for f in fields:
@@ -419,8 +422,8 @@ class NavigationOrchestrator:
                 groups.setdefault(f.name, []).append(f)
 
         for name, group in groups.items():
-            if len(group) <= _LARGE_CHECKBOX_THRESHOLD:
-                continue  # grupo pequeno → caminho normal (item a item)
+            if len(group) < _CHECKBOX_GROUP_MIN:
+                continue  # checkbox isolado → caminho normal (aceite/disponibilidade)
 
             options = [self._checkbox_option_text(f) for f in group]
             group_label = group[0].label or ""

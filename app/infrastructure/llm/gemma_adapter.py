@@ -265,8 +265,9 @@ Pergunta (seleção múltipla): {group_label}
 Opções (índice: texto):
 {numbered}
 
-Escolha no MÁXIMO {max_select} índices das opções compatíveis com a ATIVIDADE
-real da empresa. Seja criterioso: marque só o que a empresa de fato fornece.
+Escolha no MÁXIMO {max_select} índices das opções que se aplicam a ESTA empresa
+— seja a atividade que ela fornece, os documentos que ela possui, ou a categoria
+que a descreve. Seja criterioso: marque só o que realmente se aplica ao perfil.
 Se NENHUMA opção se aplica, retorne lista vazia.
 Responda somente JSON válido, sem markdown: {{"indices": [0, 3]}}
 """.strip()

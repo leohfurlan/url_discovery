@@ -80,11 +80,28 @@ class TestLargeCheckboxGroups:
         assert all(v == "false" for v in session.filled_values.values())
         assert len(session.filled_values) == 15
 
-    async def test_grupo_pequeno_nao_chama_llm(self):
+    async def test_grupo_pequeno_de_5_agora_e_roteado(self):
+        # Regressão Jaguar Q3: grupo obrigatório de 5 documentos precisa ser
+        # resolvido pelo LLM (antes ficava vazio e travava o form).
+        classifier = MagicMock()
+        classifier.choose_options = AsyncMock(return_value=[0, 2])
+        orch = _orchestrator(classifier)
+        group = [_checkbox(f"OPC{i}") for i in range(5)]
+        session = MagicMock()
+        session.filled_values = {}
+
+        await orch._resolve_large_checkbox_groups(group, session)
+
+        classifier.choose_options.assert_awaited_once()
+        assert sum(1 for v in session.filled_values.values() if v == "true") == 2
+        assert len(session.filled_values) == 5
+
+    async def test_checkbox_isolado_nao_chama_llm(self):
+        # Grupo de 1 (ex.: "Concordo") não vai ao LLM — segue caminho de aceite.
         classifier = MagicMock()
         classifier.choose_options = AsyncMock(return_value=[0])
         orch = _orchestrator(classifier)
-        group = [_checkbox(f"OPC{i}") for i in range(5)]
+        group = [_checkbox("Concordo")]
         session = MagicMock()
         session.filled_values = {}
 

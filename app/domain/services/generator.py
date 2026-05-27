@@ -158,6 +158,17 @@ class DataGenerator:
         ):
             return "Não"
 
+        # Checkbox sem classificação útil: deixa desmarcado em vez de gerar um
+        # valor fake (palavra solta), que poluía o log e nunca marcava a caixa.
+        # Grupos de checkbox são resolvidos antes, no orquestrador; aqui cobrimos
+        # o checkbox isolado que não é aceite nem documento.
+        if (
+            semantic_type in (SemanticType.UNKNOWN, SemanticType.DESCONHECIDO)
+            and field is not None
+            and field.field_type == FieldType.CHECKBOX
+        ):
+            return "false"
+
         # Partes de endereço — usa parsing do perfil com coerência de sessão
         if semantic_type in (
             SemanticType.LOGRADOURO, SemanticType.NUMERO_ENDERECO,
