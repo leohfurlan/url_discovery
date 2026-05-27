@@ -237,6 +237,57 @@ Responda somente JSON válido, sem markdown: {{"index": 0}} ou {{"index": null}}
             return options[index]
         return None
 
+    async def choose_options(
+        self,
+        group_label: str,
+        options: list[str],
+        profile_summary: str = "",
+        max_select: int = 3,
+    ) -> list[int]:
+        """Seleciona até `max_select` opções compatíveis com a atividade da empresa.
+
+        Uma única chamada ao LLM para o grupo inteiro de checkboxes, evitando
+        marcar todas as 150 categorias com o mesmo CNAE. Retorna [] se nenhuma
+        opção se encaixa no perfil.
+        """
+        if not options or not os.getenv("GEMINI_API_KEY"):
+            return []
+
+        numbered = "\n".join(f"{i}: {opt}" for i, opt in enumerate(options))
+        prompt = f"""
+Você ajuda a preencher o cadastro de uma empresa fornecedora.
+
+Perfil da empresa:
+{profile_summary or "(sem dados)"}
+
+Pergunta (seleção múltipla): {group_label}
+
+Opções (índice: texto):
+{numbered}
+
+Escolha no MÁXIMO {max_select} índices das opções compatíveis com a ATIVIDADE
+real da empresa. Seja criterioso: marque só o que a empresa de fato fornece.
+Se NENHUMA opção se aplica, retorne lista vazia.
+Responda somente JSON válido, sem markdown: {{"indices": [0, 3]}}
+""".strip()
+
+        try:
+            response = await self._client.aio.models.generate_content(
+                model=self._model,
+                contents=prompt,
+                config={"response_mime_type": "application/json"},
+            )
+            data = json.loads(response.text or "[]")
+        except Exception as exc:
+            logger.warning("choose_options_failed", group=group_label[:60], error=str(exc))
+            return []
+
+        indices = data.get("indices") if isinstance(data, dict) else data
+        if not isinstance(indices, list):
+            return []
+        valid = [i for i in indices if isinstance(i, int) and 0 <= i < len(options)]
+        return valid[:max_select]
+
     def _reconstruct(self, fields: list[FormField], raw: list[dict]) -> list[FormField]:
         by_index = {
             item.get("index"): item.get("semantic_type")

@@ -122,6 +122,19 @@ class TestChooseOption:
         assert await classifier.choose_option(field) is None
 
 
+class TestChooseOptions:
+    @pytest.mark.asyncio
+    async def test_sem_api_key_retorna_lista_vazia(self, monkeypatch):
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        classifier = make_classifier()
+
+        result = await classifier.choose_options(
+            "Categoria", ["A", "B", "C"], "atividade: mineração",
+        )
+
+        assert result == []
+
+
 @pytest.mark.skipif(
     not os.getenv("GEMINI_API_KEY"),
     reason="Precisa de GEMINI_API_KEY para chamar o LLM real.",

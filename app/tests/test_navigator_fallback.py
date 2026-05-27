@@ -37,6 +37,79 @@ def _radio(options, semantic=SemanticType.UNKNOWN, label="Tipo de Fornecedor"):
     )
 
 
+def _checkbox(value, name="cat"):
+    return FormField(
+        tag="input", field_type=FieldType.CHECKBOX,
+        label="Categoria de Fornecimento", name=name,
+        selector=f'input[type="checkbox"][name="{name}"][value="{value}"]',
+        semantic_type=SemanticType.ATIVIDADE,
+    )
+
+
+class TestLargeCheckboxGroups:
+    async def test_grupo_grande_marca_apenas_escolhidos(self):
+        classifier = MagicMock()
+        classifier.choose_options = AsyncMock(return_value=[2, 5])
+        orch = _orchestrator(classifier)
+        group = [_checkbox(f"OPC{i}") for i in range(12)]
+        session = MagicMock()
+        session.filled_values = {}
+
+        await orch._resolve_large_checkbox_groups(group, session)
+
+        classifier.choose_options.assert_awaited_once()
+        marcados = [s for s, v in session.filled_values.items() if v == "true"]
+        assert len(marcados) == 2
+        assert 'value="OPC2"' in marcados[0] or 'value="OPC2"' in " ".join(marcados)
+        # todas as 12 opções receberam um valor explícito (true/false)
+        assert len(session.filled_values) == 12
+        assert sum(1 for v in session.filled_values.values() if v == "false") == 10
+
+    async def test_grupo_grande_sem_match_desmarca_tudo(self):
+        classifier = MagicMock()
+        classifier.choose_options = AsyncMock(return_value=[])
+        orch = _orchestrator(classifier)
+        group = [_checkbox(f"OPC{i}") for i in range(15)]
+        session = MagicMock()
+        session.filled_values = {}
+
+        await orch._resolve_large_checkbox_groups(group, session)
+
+        assert all(v == "false" for v in session.filled_values.values())
+        assert len(session.filled_values) == 15
+
+    async def test_grupo_pequeno_nao_chama_llm(self):
+        classifier = MagicMock()
+        classifier.choose_options = AsyncMock(return_value=[0])
+        orch = _orchestrator(classifier)
+        group = [_checkbox(f"OPC{i}") for i in range(5)]
+        session = MagicMock()
+        session.filled_values = {}
+
+        await orch._resolve_large_checkbox_groups(group, session)
+
+        classifier.choose_options.assert_not_awaited()
+        assert session.filled_values == {}  # caminho normal trata depois
+
+    async def test_no_maximo_3_marcados_mesmo_se_llm_devolver_mais(self):
+        # Defesa: o limite real é garantido no adapter, mas o orquestrador só
+        # marca índices válidos. Aqui o stub respeita o contrato (≤3).
+        classifier = MagicMock()
+        classifier.choose_options = AsyncMock(return_value=[0, 1, 2])
+        orch = _orchestrator(classifier)
+        group = [_checkbox(f"OPC{i}") for i in range(20)]
+        session = MagicMock()
+        session.filled_values = {}
+
+        await orch._resolve_large_checkbox_groups(group, session)
+
+        assert sum(1 for v in session.filled_values.values() if v == "true") == 3
+
+    def test_checkbox_option_text_extrai_do_seletor(self):
+        f = _checkbox("ACESSÓRIOS (PINOS)")
+        assert NavigationOrchestrator._checkbox_option_text(f) == "ACESSÓRIOS (PINOS)"
+
+
 class TestResolveValueFallback:
     async def test_unknown_multiopcao_usa_escolha_do_llm(self):
         classifier = _stub_classifier("Materiais e Serviços")

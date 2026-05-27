@@ -77,6 +77,26 @@ class ClassifierPort(ABC):
         """
         return None
 
+    async def choose_options(
+        self,
+        group_label: str,
+        options: list[str],
+        profile_summary: str = "",
+        max_select: int = 3,
+    ) -> list[int]:
+        """Seleciona quais opcoes marcar num grupo grande de checkboxes.
+
+        Usado pelo orquestrador quando um grupo de checkboxes tem muitas opcoes
+        (ex.: "Categoria de Fornecimento" com 150 itens). Em vez de classificar
+        item a item — o que marcava tudo —, faz UMA decisao com base na atividade
+        da empresa, retornando os indices das opcoes compativeis (no maximo
+        ``max_select``). Lista vazia significa "nenhuma se aplica".
+
+        Implementacao padrao nao seleciona nada (retorna ``[]``). Adapters com
+        LLM sobrescrevem.
+        """
+        return []
+
     @staticmethod
     def unknown(field: FormField) -> FormField:
         """Cria uma copia do campo marcada como nao classificada."""

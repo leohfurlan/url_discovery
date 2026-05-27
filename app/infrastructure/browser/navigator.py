@@ -15,6 +15,7 @@ Mantém FormSession atualizado a cada etapa.
 from __future__ import annotations
 
 import asyncio
+import re
 from dataclasses import dataclass, field
 from enum import auto, Enum
 from typing import Callable, Awaitable
@@ -75,6 +76,14 @@ _NEXT_BUTTON_SELECTORS = [
     '[class*="next"]',
     '[class*="submit"]',
 ]
+
+# Acima deste número de opções, um grupo de checkboxes deixa de ser classificado
+# item a item (que marcava tudo com o mesmo semantic) e passa a uma seleção única
+# via LLM com base na atividade da empresa (Ajuste 3).
+_LARGE_CHECKBOX_THRESHOLD = 10
+
+# Extrai o texto da opção do seletor de checkbox: ...[value="OPÇÃO"]
+_CHECKBOX_VALUE_RE = re.compile(r'\[value="(.*)"\]\s*$')
 
 # Indicadores de sucesso/conclusão na página
 _SUCCESS_INDICATORS = [
@@ -348,6 +357,61 @@ class NavigationOrchestrator:
         except Exception:
             return False
 
+    @staticmethod
+    def _checkbox_option_text(field: FormField) -> str:
+        """Texto da opção de um checkbox de grupo (vem no value do seletor;
+        cai no label como fallback)."""
+        m = _CHECKBOX_VALUE_RE.search(field.selector)
+        if m:
+            return m.group(1).replace('\\"', '"').strip()
+        label = field.label or ""
+        return label.split(" — ", 1)[1].strip() if " — " in label else label.strip()
+
+    async def _resolve_large_checkbox_groups(
+        self, fields: list[FormField], session: FormSession
+    ) -> None:
+        """Trata grupos grandes de checkbox (>N opções) com uma única seleção via LLM.
+
+        Sem isso, cada opção era classificada como atividade_empresa e marcada com
+        o mesmo CNAE — a empresa acabava se candidatando a fornecer tudo. Aqui o
+        LLM escolhe no máximo 3 opções compatíveis com a atividade; as demais são
+        explicitamente desmarcadas. Pré-preenche session.filled_values para que o
+        loop campo a campo não reprocesse essas opções.
+        """
+        groups: dict[str, list[FormField]] = {}
+        for f in fields:
+            if f.field_type == FieldType.CHECKBOX and f.name:
+                groups.setdefault(f.name, []).append(f)
+
+        for name, group in groups.items():
+            if len(group) <= _LARGE_CHECKBOX_THRESHOLD:
+                continue  # grupo pequeno → caminho normal (item a item)
+
+            options = [self._checkbox_option_text(f) for f in group]
+            group_label = group[0].label or ""
+            chosen = await self._classifier.choose_options(
+                group_label, options, self._profile_summary, max_select=3,
+            )
+            chosen_set = {i for i in chosen if 0 <= i < len(group)}
+
+            for i, f in enumerate(group):
+                if f.selector not in session.filled_values:
+                    session.filled_values[f.selector] = "true" if i in chosen_set else "false"
+
+            if chosen_set:
+                logger.info(
+                    "checkbox_group_resolved",
+                    group=group_label[:60] or None,
+                    marked=len(chosen_set),
+                    total=len(group),
+                )
+            else:
+                logger.warning(
+                    "no_matching_options",
+                    group=group_label[:60] or None,
+                    total=len(group),
+                )
+
     async def _resolve_value(self, field: FormField) -> str | None:
         """Decide o valor de um campo, com fallback inteligente para o caso unknown.
 
@@ -431,6 +495,9 @@ class NavigationOrchestrator:
 
             classified = await self._classifier.classify(new_fields)
             all_classified.extend(classified)
+
+            # Grupos grandes de checkbox: uma única decisão antes do loop campo a campo.
+            await self._resolve_large_checkbox_groups(classified, session)
 
             for f in classified:
                 if f.semantic_type and f.selector not in session.filled_values:
