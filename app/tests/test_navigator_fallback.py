@@ -13,7 +13,25 @@ import pytest
 from domain.entities.company_profile import CompanyProfile
 from domain.entities.form import FieldType, FormField, SemanticType
 from domain.services.generator import DataGenerator
-from infrastructure.browser.navigator import NavigationOrchestrator
+from infrastructure.browser.navigator import NavigationOrchestrator, _value_matches_option
+
+
+class TestValueMatchesOption:
+    def test_match_exato_e_substring(self):
+        assert _value_matches_option("Brasil", ["Brasil", "Argentina"])
+        assert _value_matches_option("MG", ["MG - Minas Gerais", "SP - São Paulo"])
+
+    def test_expansao_uf(self):
+        # "MG" casa com "Minas Gerais" via expansão de UF
+        assert _value_matches_option("MG", ["Minas Gerais", "São Paulo"])
+
+    def test_sem_match(self):
+        assert not _value_matches_option(
+            "72.10-0-00 - Pesquisa e desenvolvimento", ["Materiais", "Serviços", "Ambos"]
+        )
+
+    def test_vazio(self):
+        assert not _value_matches_option("", ["A", "B"])
 
 
 def _orchestrator(classifier, profile: CompanyProfile | None = None) -> NavigationOrchestrator:
@@ -216,6 +234,64 @@ class TestResolveValueFallback:
         await orch._resolve_value(field)
         assert field.classification_source == "classified"
         assert field.confidence == "high"
+
+    async def test_q44_radio_classificado_como_dado_sem_match_vai_ao_llm(self):
+        # Q44 "Classificação de Fornecedor": radio classificado atividade_empresa,
+        # valor = CNAE/atividade que não casa com Materiais/Serviços/Ambos.
+        classifier = _stub_classifier("Serviços")
+        profile = CompanyProfile(
+            atividade="72.10-0-00 - Pesquisa e desenvolvimento experimental",
+            supplier_kind="serviços",
+        )
+        orch = _orchestrator(classifier, profile=profile)
+        field = FormField(
+            tag="input", field_type=FieldType.RADIO,
+            label="Classificação de Fornecedor", name="g",
+            selector='input[type="radio"][name="g"]',
+            options=["Materiais", "Serviços", "Ambos"],
+            semantic_type=SemanticType.ATIVIDADE,
+        )
+
+        value = await orch._resolve_value(field)
+
+        assert value == "Serviços"
+        classifier.choose_option.assert_awaited_once()
+        assert field.classification_source == "llm_fallback"
+
+    async def test_choice_classificado_que_casa_opcao_nao_vai_ao_llm(self):
+        # País: valor gerado "Brasil" casa com a opção → confia no valor, sem LLM.
+        classifier = _stub_classifier("ignorado")
+        orch = _orchestrator(classifier)
+        field = FormField(
+            tag="select", field_type=FieldType.SELECT,
+            label="País", name="pais", selector='select[name="pais"]',
+            options=["Brasil", "Argentina", "Chile"],
+            semantic_type=SemanticType.PAIS,
+        )
+
+        value = await orch._resolve_value(field)
+
+        assert value == "Brasil"
+        classifier.choose_option.assert_not_awaited()
+        assert field.classification_source == "classified"
+
+    async def test_aceite_em_radio_nao_binario_nao_vai_ao_llm(self):
+        # aceite_termos gera "true" (normalizado pelo filler p/ Sim) — não é texto
+        # de opção a casar; fica fora do rematch mesmo sem casar a opção.
+        classifier = _stub_classifier("x")
+        orch = _orchestrator(classifier)
+        field = FormField(
+            tag="input", field_type=FieldType.RADIO,
+            label="Concordo com os termos", name="g",
+            selector='input[type="radio"][name="g"]',
+            options=["Sim", "Não", "Não se aplica"],
+            semantic_type=SemanticType.ACEITE_TERMOS,
+        )
+
+        value = await orch._resolve_value(field)
+
+        assert value == "true"
+        classifier.choose_option.assert_not_awaited()
 
     async def test_unknown_radio_com_duas_opcoes_nao_binarias_nao_dispara(self):
         # <=2 opções: não há ambiguidade suficiente para gastar uma chamada de LLM;

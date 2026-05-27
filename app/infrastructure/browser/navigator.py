@@ -30,7 +30,7 @@ from domain.entities.form import (
 from domain.services.classifier_port import ClassifierPort
 from domain.services.generator import DataGenerator
 from infrastructure.browser.crawler import DOMCrawler
-from infrastructure.browser.filler import FormFiller
+from infrastructure.browser.filler import FormFiller, _UF_TO_NAME
 from infrastructure.llm.heuristic import _is_binary_yes_no
 
 logger = structlog.get_logger(__name__)
@@ -93,6 +93,38 @@ def _tag(field: FormField, source: str, confidence: str) -> None:
     """Anota origem e confiança da decisão de preenchimento (Ajuste 4)."""
     field.classification_source = source
     field.confidence = confidence
+
+
+# Semantics cujo valor é booleano/afirmativo (true/false), normalizado pelo filler
+# para Sim/Não — não é um texto de opção a casar, então ficam fora do rematch.
+_OPTION_VALUE_SEMANTICS: set[SemanticType] = {
+    SemanticType.ACEITE_TERMOS,
+    SemanticType.DOCUMENTO_PDF,
+}
+
+
+def _value_matches_option(value: str, options: list[str]) -> bool:
+    """True se o valor gerado corresponde a alguma opção do campo de escolha.
+
+    Espelha (de forma conservadora) o casamento do filler: igualdade ou substring,
+    case-insensitive, com expansão de UF (ex.: "MG" casa com "Minas Gerais").
+    Usado para decidir se confiamos no valor gerado ou pedimos ao LLM uma opção.
+    """
+    v = (value or "").strip().lower()
+    if not v:
+        return False
+    candidates = [v]
+    expanded = _UF_TO_NAME.get((value or "").strip().upper())
+    if expanded:
+        candidates.append(expanded.lower())
+    for opt in options:
+        o = opt.strip().lower()
+        if not o:
+            continue
+        for c in candidates:
+            if c == o or c in o or o in c:
+                return True
+    return False
 
 # Indicadores de sucesso/conclusão na página
 _SUCCESS_INDICATORS = [
@@ -525,6 +557,43 @@ class NavigationOrchestrator:
 
         # Caminho normal: distingue dado real do perfil de dado gerado/fake.
         value = self._generator.generate(st, field=field)
+
+        # Campo de escolha classificado como DADO, mas o valor gerado não casa com
+        # nenhuma opção (ex.: Q44 "Classificação de Fornecedor" recebeu o CNAE em
+        # vez de Materiais/Serviços/Ambos). Em vez de deixar o filler marcar uma
+        # opção arbitrária, o LLM escolhe uma opção real com base no perfil
+        # (inclui supplier_kind/description). Estado/UF e afins, que casam com
+        # uma opção, seguem pelo valor gerado.
+        if (
+            not is_unknown
+            and field.field_type in (FieldType.RADIO, FieldType.SELECT)
+            and len(field.options) >= 2
+            and not _is_binary_yes_no(field)
+            and st not in _OPTION_VALUE_SEMANTICS
+            and not _value_matches_option(value, field.options)
+        ):
+            choice = await self._classifier.choose_option(field, self._profile_summary)
+            if choice:
+                _tag(field, "llm_fallback", "medium")
+                logger.info(
+                    "llm_option_rematch",
+                    selector=field.selector,
+                    label=(field.label or "")[:60] or None,
+                    semantic=st.value if st else None,
+                    generated=str(value)[:40],
+                    choice=str(choice)[:60],
+                )
+                return choice
+            _tag(field, "human_review_needed", "low")
+            self._review_queue.append(field)
+            logger.warning(
+                "human_review_needed",
+                selector=field.selector,
+                label=(field.label or "")[:80] or None,
+                reason="classified_value_no_option_match",
+            )
+            return value
+
         if self._profile is not None and self._profile.get(st):
             _tag(field, "profile_match", "high")
         elif is_unknown:
