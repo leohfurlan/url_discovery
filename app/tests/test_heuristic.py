@@ -106,6 +106,19 @@ class TestCamposEstruturaisAindaClassificam:
         field = FormField(tag="input", field_type=FieldType.TEXT, label="CNPJ", selector="#c")
         assert heuristic_classify(field) == SemanticType.CNPJ
 
+    def test_descricao_das_atividades_plural_classifica_atividade(self):
+        # "Descrição das Atividades" (plural) deve ser atividade_empresa — para
+        # ser preenchida com o CNAE do perfil, não cair em texto_livre.
+        field = _textarea("55. Descrição das Atividades Texto Multilinha")
+        assert heuristic_classify(field) == SemanticType.ATIVIDADE
+
+    def test_atividade_principal_singular_classifica_atividade(self):
+        field = FormField(
+            tag="input", field_type=FieldType.TEXT,
+            label="Atividade Principal", selector="#a",
+        )
+        assert heuristic_classify(field) == SemanticType.ATIVIDADE
+
     def test_numero_agencia_separado_classifica_agencia(self):
         # Após a correção do crawler o label vem com espaço ("Agência Texto..."),
         # então o word-boundary de AGENCIA volta a funcionar.

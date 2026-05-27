@@ -44,6 +44,11 @@ def test_fallback_unknown():
     assert len(valor) > 0
 
 
+def test_texto_livre_fica_em_branco():
+    # Comentários, observações, "top clientes" etc. não devem ser inventados.
+    assert generate(SemanticType.TEXTO_LIVRE) == ""
+
+
 def _f(field_type: FieldType) -> FormField:
     return FormField(tag="input", field_type=field_type, label="x", selector="#x")
 

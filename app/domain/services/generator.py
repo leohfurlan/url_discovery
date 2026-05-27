@@ -93,7 +93,10 @@ def generate(semantic_type: SemanticType) -> str:
             return "true"
 
         case SemanticType.TEXTO_LIVRE:
-            return fake.sentence(nb_words=6)
+            # Campos de texto aberto (comentários, observações, "top clientes",
+            # descrições livres) ficam em branco — preferimos não inventar
+            # informação a preencher com texto fake.
+            return ""
 
         case SemanticType.FAVORECIDO:
             return fake.name()

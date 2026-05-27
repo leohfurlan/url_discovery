@@ -55,7 +55,10 @@ _RULES: list[tuple[re.Pattern, SemanticType]] = [
     # a ordem garante que o mais específico vence.
     (re.compile(r'\b(nome\s+fantasia|nome\s+de\s+fantasia|nome\s+comercial|trade\s+name|fantasia)\b', re.I), SemanticType.NOME_FANTASIA),
     (re.compile(r'\b(raz[aã]o\s+social|nome\s+da\s+empresa|company\s+name|denomina[cç][aã]o)\b', re.I),     SemanticType.RAZAO_SOCIAL),
-    (re.compile(r'\b(atividade|cnae|ramo\s+de\s+atividade|segmento|setor)\b', re.I),                         SemanticType.ATIVIDADE),
+    # "atividades?" cobre singular e plural: "Atividade Principal" e
+    # "Descrição das Atividades" (sem o ?, o \b falhava no plural e o campo
+    # caía em texto_livre, sendo preenchido com frase fake em vez do CNAE).
+    (re.compile(r'\b(atividades?|cnae|ramo\s+de\s+atividades?|segmento|setor)\b', re.I),                     SemanticType.ATIVIDADE),
 
     # ── Contato ───────────────────────────────────────────────────────────
     (re.compile(r'\be-?mail\b', re.I),                        SemanticType.EMAIL_CORPORATIVO),
