@@ -38,12 +38,13 @@ class TestExtractHints:
         assert classifier._extract_hints(fields) == [
             {
                 "index": 0,
+                "field_type": "text",
                 "label": "CNPJ",
                 "name": "document",
                 "id": "cnpj",
                 "placeholder": "00.000.000/0000-00",
             },
-            {"index": 1, "label": "E-mail"},
+            {"index": 1, "field_type": "email", "label": "E-mail"},
         ]
 
 

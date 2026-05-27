@@ -49,22 +49,35 @@ class DOMCrawler:
             try:
                 attrs = await el.evaluate(
                     r"""el => {
+                        // Lê o texto de um elemento juntando seus text nodes com espaço.
+                        // Em SPAs (ex: MS Forms) o título da pergunta e a dica de
+                        // acessibilidade ("Texto de linha única") ficam em spans irmãos
+                        // sem espaço entre eles; textContent puro os cola ("AgênciaTexto"),
+                        // quebrando os word-boundaries da classificação heurística.
+                        const readText = (node) => {
+                            if (!node) return '';
+                            const parts = [];
+                            const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT, null);
+                            let n;
+                            while ((n = walker.nextNode())) {
+                                const t = n.textContent.trim();
+                                if (t) parts.push(t);
+                            }
+                            return parts.join(' ').replace(/\s+/g, ' ').trim();
+                        };
                         // Resolve label text via aria-labelledby (suporta múltiplos IDs separados por espaço)
                         const ariaLabelledby = el.getAttribute('aria-labelledby') || '';
                         let labelText = '';
                         if (ariaLabelledby) {
                             labelText = ariaLabelledby.trim().split(/\s+/)
-                                .map(id => {
-                                    const el2 = document.getElementById(id);
-                                    return el2 ? el2.textContent.trim() : '';
-                                })
+                                .map(id => readText(document.getElementById(id)))
                                 .filter(t => t)
                                 .join(' ');
                         }
                         // Fallback: <label for="id"> explícito
                         if (!labelText && el.id) {
                             const lbl = document.querySelector('label[for="' + el.id + '"]');
-                            if (lbl) labelText = lbl.textContent.trim();
+                            if (lbl) labelText = readText(lbl);
                         }
                         // Fallback: elemento <label> pai
                         if (!labelText) {
@@ -92,16 +105,13 @@ class DOMCrawler:
                                 const grpAria = grp.getAttribute('aria-labelledby') || '';
                                 if (grpAria) {
                                     groupLabel = grpAria.trim().split(/\s+/)
-                                        .map(id => {
-                                            const el2 = document.getElementById(id);
-                                            return el2 ? el2.textContent.trim() : '';
-                                        })
+                                        .map(id => readText(document.getElementById(id)))
                                         .filter(t => t)
                                         .join(' ');
                                 }
                                 if (!groupLabel) {
                                     const legend = grp.querySelector('legend');
-                                    if (legend) groupLabel = legend.textContent.trim();
+                                    if (legend) groupLabel = readText(legend);
                                 }
                                 if (!groupLabel) {
                                     groupLabel = grp.getAttribute('aria-label') || '';
@@ -209,14 +219,22 @@ class DOMCrawler:
                     continue
                 attrs = await el.evaluate(
                     r"""el => {
+                        const readText = (node) => {
+                            if (!node) return '';
+                            const parts = [];
+                            const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT, null);
+                            let n;
+                            while ((n = walker.nextNode())) {
+                                const t = n.textContent.trim();
+                                if (t) parts.push(t);
+                            }
+                            return parts.join(' ').replace(/\s+/g, ' ').trim();
+                        };
                         const ariaLabelledby = el.getAttribute('aria-labelledby') || '';
                         let labelText = '';
                         if (ariaLabelledby) {
                             labelText = ariaLabelledby.trim().split(/\s+/)
-                                .map(id => {
-                                    const el2 = document.getElementById(id);
-                                    return el2 ? el2.textContent.trim() : '';
-                                })
+                                .map(id => readText(document.getElementById(id)))
                                 .filter(t => t)
                                 .join(' ');
                         }
