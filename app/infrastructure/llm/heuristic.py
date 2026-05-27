@@ -76,6 +76,17 @@ _RULES: list[tuple[re.Pattern, SemanticType]] = [
 ]
 
 
+# Conjuntos de opções que indicam um radio binário Sim/Não — resolvidos
+# localmente para evitar ida ao LLM. Sem isso, cada par "Sim/Não" do
+# questionário de integridade vira uma chamada de ~30s.
+_BINARY_YES_NO_OPTION_SETS: tuple[frozenset[str], ...] = (
+    frozenset({"sim", "não"}),
+    frozenset({"sim", "nao"}),
+    frozenset({"yes", "no"}),
+    frozenset({"true", "false"}),
+)
+
+
 def heuristic_classify(field: FormField) -> SemanticType | None:
     """Tenta classificar o campo por heurística de texto. Retorna None se incerto."""
     text = " ".join(filter(None, [
@@ -90,4 +101,16 @@ def heuristic_classify(field: FormField) -> SemanticType | None:
             continue
         if pattern.search(text):
             return semantic
+
+    # Fallback: radio binário Sim/Não sem semântica detectada → resolvido
+    # localmente como UNKNOWN. O DataGenerator (generator.py) trata
+    # RADIO + UNKNOWN retornando "Não", padrão conservador apropriado
+    # para questionários de compliance/integridade.
+    # Vem por último para não atropelar ACEITE_TERMOS em perguntas como
+    # "Concorda com os termos?" + options=["Sim", "Não"].
+    if field.field_type == FieldType.RADIO and field.options:
+        options_norm = frozenset(o.strip().lower() for o in field.options)
+        if options_norm in _BINARY_YES_NO_OPTION_SETS:
+            return SemanticType.UNKNOWN
+
     return None

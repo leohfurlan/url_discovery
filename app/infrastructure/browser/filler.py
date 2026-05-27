@@ -39,6 +39,13 @@ _UF_TO_NAME: dict[str, str] = {
 # Delay entre keystrokes para portais sensíveis a ritmo de digitação
 _TYPE_DELAY_MS = 40
 
+# Vocabulário binário PT-BR/EN para radios Sim/Não. Usado para mapear valores
+# como "true"/"false" (gerados para semantic=aceite_termos) para o texto real
+# da opção em formulários brasileiros.
+_AFFIRMATIVE_VALUES = {"true", "yes", "sim", "s", "1", "y"}
+_NEGATIVE_VALUES = {"false", "no", "não", "nao", "n", "0"}
+_NEGATIVE_LABELS = {"não", "nao", "no"}
+
 
 class FillError(Exception):
     """Erro recuperável ao preencher um campo individual."""
@@ -124,6 +131,17 @@ class FormFiller:
         # COMBOBOX: é visível mas interage via clique, não via wait_for.
         locator = self._resolve_locator(field.selector)
         if field.field_type not in (FieldType.RADIO, FieldType.CHECKBOX, FieldType.SELECT, FieldType.COMBOBOX):
+            # Pré-check instantâneo: se o seletor não está mais na DOM (página
+            # avançou e ainda há campos antigos na fila), falha imediatamente
+            # em vez de esperar 8s pelo wait_for ou 30s pelo type() default.
+            try:
+                if await locator.count() == 0:
+                    raise FillError(f"Campo não existe na DOM atual: {field.selector}")
+            except FillError:
+                raise
+            except Exception as exc:
+                raise FillError(f"Falha ao localizar campo: {field.selector}") from exc
+
             try:
                 await locator.wait_for(state="visible", timeout=self._timeout)
             except Exception as exc:
@@ -141,7 +159,7 @@ class FormFiller:
             case FieldType.RADIO:
                 await self._fill_radio(field, str(value))
             case FieldType.CHECKBOX:
-                await self._fill_checkbox(locator, value)
+                await self._fill_checkbox(field, locator, value)
             case FieldType.FILE:
                 await self._fill_file(locator, field, str(value))
             case FieldType.DATE:
@@ -155,9 +173,12 @@ class FormFiller:
     # ------------------------------------------------------------------
 
     async def _fill_text(self, locator: Locator, value: str) -> None:
+        # Passa timeout explícito em clear() e type() para evitar o fallback
+        # de 30s do Playwright caso o elemento desapareça da DOM entre o
+        # wait_for de _fill_field e essa chamada (corrida em SPAs).
         try:
-            await locator.clear()
-            await locator.type(value, delay=_TYPE_DELAY_MS)
+            await locator.clear(timeout=self._timeout)
+            await locator.type(value, delay=_TYPE_DELAY_MS, timeout=self._timeout)
         except Exception as exc:
             raise FillError(str(exc)) from exc
 
@@ -276,15 +297,60 @@ class FormFiller:
         Radio buttons agrupados por `name`.
 
         Estratégia (em ordem):
-        1. check(force=True) no input cujo `value` HTML bate com `value`
-        2. Clicar na <label> cuja texto contenha `value` (robusto para MS Forms
-           onde o value HTML é um GUID, não o texto da opção)
-        3. check(force=True) no primeiro radio do grupo como fallback
+        1. Match exato do texto da label (normalizando true/false → Sim/Não).
+        2. Match parcial (substring) do texto da label.
+        3. check(force=True) no input cujo atributo `value` HTML bate.
+        4. Fallback conservador: prefere a opção "Não" se existir, senão
+           a primeira do grupo.
+
+        Em React SPAs como MS Forms o input fica oculto e `check(force=True)`
+        direto no input nem sempre dispara o handler de estado — por isso o
+        match por label vem antes.
         """
         group_selector = f'input[type="radio"][name="{field.name}"]'
         group = self._resolve_locator(group_selector)
+        value_norm = (value or "").strip().lower()
 
-        # 1. Tenta pelo atributo value HTML
+        # Normaliza booleanos para o vocabulário PT-BR de radios Sim/Não.
+        # Sem isso, semantic=aceite_termos (value="true") nunca bate em "Sim".
+        if value_norm in _AFFIRMATIVE_VALUES:
+            candidates = ["sim", "yes", value_norm]
+        elif value_norm in _NEGATIVE_VALUES:
+            candidates = ["não", "nao", "no", value_norm]
+        else:
+            candidates = [value_norm]
+
+        try:
+            count = await group.count()
+        except Exception as exc:
+            raise FillError(f"Grupo de radio não encontrado: {exc}") from exc
+
+        # Coleta (radio, texto da label) para todos os radios do grupo.
+        radio_labels: list[tuple[Locator, str]] = []
+        for i in range(count):
+            radio = group.nth(i)
+            label_text = await self._get_radio_label_text(radio)
+            radio_labels.append((radio, label_text))
+
+        # 1. Match exato do texto da label
+        for candidate in candidates:
+            if not candidate:
+                continue
+            for radio, label_text in radio_labels:
+                if label_text.strip().lower() == candidate:
+                    if await self._click_radio_label(radio):
+                        return
+
+        # 2. Match parcial (substring) — útil quando a label tem prefixos do MS Forms
+        for candidate in candidates:
+            if not candidate:
+                continue
+            for radio, label_text in radio_labels:
+                if label_text and candidate in label_text.lower():
+                    if await self._click_radio_label(radio):
+                        return
+
+        # 3. Match pelo atributo value HTML
         by_value = self._resolve_locator(
             f'input[type="radio"][name="{field.name}"][value="{value}"]'
         )
@@ -295,45 +361,87 @@ class FormFiller:
         except Exception:
             pass
 
-        # 2. Tenta pela label associada (texto visível da opção)
-        #    Suporta label[for="id"] (HTML padrão) e aria-labelledby (MS Forms / React SPAs)
-        try:
-            count = await group.count()
-            for i in range(count):
-                radio = group.nth(i)
+        # 4. Fallback conservador: prefere "Não", senão primeiro do grupo
+        for radio, label_text in radio_labels:
+            if label_text.strip().lower() in _NEGATIVE_LABELS:
+                if await self._click_radio_label(radio):
+                    return
 
-                # 2a. label[for="id"] — HTML padrão
-                radio_id = await radio.get_attribute("id")
-                if radio_id:
-                    label = self._resolve_locator(f'label[for="{radio_id}"]')
-                    label_text = (await label.text_content() or "").strip()
-                    if value.lower() in label_text.lower():
-                        await label.click(timeout=self._timeout)
-                        return
-
-                # 2b. aria-labelledby — MS Forms / React SPAs sem id explícito
-                aria_ids = await radio.get_attribute("aria-labelledby")
-                if aria_ids:
-                    first_id = aria_ids.split()[0]
-                    label = self._resolve_locator(f"#{first_id}")
-                    label_text = (await label.text_content() or "").strip()
-                    if value.lower() in label_text.lower():
-                        await radio.evaluate("el => el.click()")
-                        return
-        except Exception:
-            pass
-
-        # 3. Fallback: primeiro radio do grupo com force=True
         try:
             await group.first.check(force=True, timeout=self._timeout)
         except Exception as exc:
             raise FillError(f"Radio não encontrado: {exc}") from exc
 
-    async def _fill_checkbox(self, locator: Locator, value: Any) -> None:
-        # String não-vazia e não-explicitamente-falsa → marcar.
+    async def _get_radio_label_text(self, radio: Locator) -> str:
+        """Extrai o texto visível da label associada ao radio (label[for] ou aria-labelledby)."""
+        try:
+            radio_id = await radio.get_attribute("id")
+            if radio_id:
+                label = self._resolve_locator(f'label[for="{radio_id}"]')
+                text = (await label.text_content() or "").strip()
+                if text:
+                    return text
+
+            aria_ids = await radio.get_attribute("aria-labelledby")
+            if aria_ids:
+                first_id = aria_ids.split()[0]
+                label = self._resolve_locator(f"#{first_id}")
+                text = (await label.text_content() or "").strip()
+                if text:
+                    return text
+        except Exception:
+            pass
+        return ""
+
+    async def _click_radio_label(self, radio: Locator) -> bool:
+        """Clica na <label> do radio — caminho confiável em React SPAs.
+        Retorna False se não conseguiu clicar (caller decide o próximo fallback)."""
+        try:
+            radio_id = await radio.get_attribute("id")
+            if radio_id:
+                label = self._resolve_locator(f'label[for="{radio_id}"]')
+                if await label.count() > 0:
+                    await label.click(timeout=self._timeout)
+                    return True
+        except Exception:
+            pass
+
+        # Último recurso: dispara click via JS no próprio input
+        try:
+            await radio.evaluate("el => el.click()")
+            return True
+        except Exception:
+            return False
+
+    async def _fill_checkbox(self, field: FormField, locator: Locator, value: Any) -> None:
+        # Booleano: trata diretamente sem ambiguidade.
+        # String: separa três casos:
+        #   - afirmativo explícito (true/sim/yes/1) → marcar
+        #   - falsy explícito (false/não/no/0/"") → desmarcar
+        #   - texto livre (ex: o CNAE da empresa para semantic=atividade_empresa)
+        #     → só marca se o valor casar com a label deste checkbox específico
+        #
+        # Sem esse refinamento, formulários com grupo de checkboxes multi-seleção
+        # (ex: "Quais materiais você fornece?" com 183 opções) ficavam todos
+        # marcados, porque cada opção era classificada como atividade_empresa
+        # e recebia o mesmo CNAE como valor — qualquer string não-falsy passava.
+        _AFFIRMATIVE = {"true", "yes", "sim", "1", "y", "checked"}
         _FALSY = {"false", "não", "nao", "no", "0", "n", ""}
-        if isinstance(value, str):
-            should_check = value.lower().strip() not in _FALSY
+
+        if isinstance(value, bool):
+            should_check = value
+        elif isinstance(value, str):
+            val_norm = value.lower().strip()
+            if val_norm in _FALSY:
+                should_check = False
+            elif val_norm in _AFFIRMATIVE:
+                should_check = True
+            else:
+                label_norm = (field.label or "").lower().strip()
+                if not label_norm:
+                    should_check = False
+                else:
+                    should_check = val_norm in label_norm or label_norm in val_norm
         else:
             should_check = bool(value)
 

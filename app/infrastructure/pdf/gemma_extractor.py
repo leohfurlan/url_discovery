@@ -17,7 +17,7 @@ logger = structlog.get_logger(__name__)
 
 _PROMPTS: dict[DocumentType, str] = {
     DocumentType.CARTAO_CNPJ: """Você está analisando um Cartão CNPJ emitido pela Receita Federal brasileira.
-Extraia as informações abaixo do texto fornecido e retorne SOMENTE um JSON válido, sem markdown, sem explicação.
+Extraia as informações abaixo do texto fornecido e retorne SOMENTE um objeto JSON (não array), sem markdown, sem explicação.
 Se um campo não existir no documento, use null.
 
 Campos:
@@ -39,7 +39,7 @@ Texto do documento:
 {text}""",
 
     DocumentType.CONTRATO_SOCIAL: """Você está analisando um Contrato Social ou Alteração Contratual de empresa brasileira.
-Extraia as informações abaixo e retorne SOMENTE um JSON válido, sem markdown, sem explicação.
+Extraia as informações abaixo e retorne SOMENTE um objeto JSON (não array), sem markdown, sem explicação.
 Se um campo não existir no documento, use null.
 
 Campos:
@@ -104,6 +104,10 @@ def extract_fields(
         )
         raw = (response.text or "").strip()
         result = json.loads(raw)
+        # Gemma às vezes embrulha a resposta num array de 1 elemento mesmo
+        # com o prompt pedindo objeto. Desempacota silenciosamente.
+        if isinstance(result, list) and len(result) == 1 and isinstance(result[0], dict):
+            result = result[0]
         if not isinstance(result, dict):
             raise ValueError("resposta não é um objeto JSON")
         logger.info("extracao_concluida", tipo=doc_type.value, campos_extraidos=len([v for v in result.values() if v]))

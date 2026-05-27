@@ -14,11 +14,11 @@ def _extractor() -> DocumentExtractor:
 # ── load_from_directory ───────────────────────────────────────────────────────
 
 class TestLoadFromDirectory:
-    def test_retorna_perfil_vazio_sem_pdfs(self, tmp_path):
-        profile = _extractor().load_from_directory(tmp_path)
+    async def test_retorna_perfil_vazio_sem_pdfs(self, tmp_path):
+        profile = await _extractor().load_from_directory(tmp_path)
         assert profile.is_empty()
 
-    def test_carrega_campos_do_cartao_cnpj(self, tmp_path):
+    async def test_carrega_campos_do_cartao_cnpj(self, tmp_path):
         (tmp_path / "cnpj.pdf").write_bytes(b"fake")
 
         campos_cnpj = {
@@ -29,13 +29,13 @@ class TestLoadFromDirectory:
         }
 
         with patch.object(DocumentExtractor, "load_single", return_value={**campos_cnpj, "_doc_type": DocumentType.CARTAO_CNPJ}):
-            profile = _extractor().load_from_directory(tmp_path)
+            profile = await _extractor().load_from_directory(tmp_path)
 
         assert profile.cnpj == "12.345.678/0001-99"
         assert profile.razao_social == "Vulcaflex S.A."
         assert profile.cidade == "Caxias do Sul"
 
-    def test_carrega_campos_bancarios_das_demonstracoes(self, tmp_path):
+    async def test_carrega_campos_bancarios_das_demonstracoes(self, tmp_path):
         (tmp_path / "dre.pdf").write_bytes(b"fake")
 
         campos_dre = {
@@ -46,14 +46,14 @@ class TestLoadFromDirectory:
         }
 
         with patch.object(DocumentExtractor, "load_single", return_value={**campos_dre, "_doc_type": DocumentType.DEMONSTRACOES_FINANCEIRAS}):
-            profile = _extractor().load_from_directory(tmp_path)
+            profile = await _extractor().load_from_directory(tmp_path)
 
         assert profile.banco == "Bradesco"
         assert profile.agencia == "1234"
         assert profile.conta == "56789-0"
         assert profile.favorecido == "Vulcaflex S.A."
 
-    def test_cartao_cnpj_tem_prioridade_sobre_contrato_social(self, tmp_path):
+    async def test_cartao_cnpj_tem_prioridade_sobre_contrato_social(self, tmp_path):
         (tmp_path / "cnpj.pdf").write_bytes(b"fake")
         (tmp_path / "contrato.pdf").write_bytes(b"fake")
 
@@ -63,11 +63,11 @@ class TestLoadFromDirectory:
         ]
 
         with patch.object(DocumentExtractor, "load_single", side_effect=resultados):
-            profile = _extractor().load_from_directory(tmp_path)
+            profile = await _extractor().load_from_directory(tmp_path)
 
         assert profile.razao_social == "Empresa CNPJ"
 
-    def test_contrato_preenche_campos_ausentes_no_cnpj(self, tmp_path):
+    async def test_contrato_preenche_campos_ausentes_no_cnpj(self, tmp_path):
         (tmp_path / "cnpj.pdf").write_bytes(b"fake")
         (tmp_path / "contrato.pdf").write_bytes(b"fake")
 
@@ -77,16 +77,16 @@ class TestLoadFromDirectory:
         ]
 
         with patch.object(DocumentExtractor, "load_single", side_effect=resultados):
-            profile = _extractor().load_from_directory(tmp_path)
+            profile = await _extractor().load_from_directory(tmp_path)
 
         assert profile.cnpj == "11.111.111/0001-11"
         assert profile.nome_socio_principal == "João da Silva"
 
-    def test_ignora_pdfs_com_extracao_vazia(self, tmp_path):
+    async def test_ignora_pdfs_com_extracao_vazia(self, tmp_path):
         (tmp_path / "desconhecido.pdf").write_bytes(b"fake")
 
         with patch.object(DocumentExtractor, "load_single", return_value={"_doc_type": DocumentType.DESCONHECIDO}):
-            profile = _extractor().load_from_directory(tmp_path)
+            profile = await _extractor().load_from_directory(tmp_path)
 
         assert profile.is_empty()
 

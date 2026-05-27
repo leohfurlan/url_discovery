@@ -33,6 +33,7 @@ def _attrs(
     placeholder: str = "",
     required: bool = False,
     label: str = "",
+    group_label: str = "",
     aria_labelledby: str = "",
     options: list[str] | None = None,
 ) -> dict:
@@ -44,6 +45,7 @@ def _attrs(
         "placeholder": placeholder,
         "required": required,
         "label": label,
+        "groupLabel": group_label,
         "ariaLabelledby": aria_labelledby,
         "options": options or [],
     }
@@ -187,6 +189,43 @@ class TestDOMCrawlerExtractFields:
         f = fields[0]
         assert f.selector == 'input[type="radio"][name="pagamento"]'
         assert f.field_type == FieldType.RADIO
+
+    async def test_radio_group_deduped_to_single_field(self):
+        """Vários radios do mesmo grupo (mesmo name) viram UM FormField,
+        com as labels das opções agregadas em options."""
+        elements = [
+            _make_element(attrs=_attrs(type_="radio", name="forn", label="Materiais",
+                                       group_label="Tipo de Fornecimento")),
+            _make_element(attrs=_attrs(type_="radio", name="forn", label="Serviços",
+                                       group_label="Tipo de Fornecimento")),
+            _make_element(attrs=_attrs(type_="radio", name="forn", label="Materiais e Serviços",
+                                       group_label="Tipo de Fornecimento")),
+        ]
+        page = _make_page(*elements)
+
+        fields = await DOMCrawler(page).extract_fields()
+
+        assert len(fields) == 1
+        f = fields[0]
+        assert f.field_type == FieldType.RADIO
+        assert f.selector == 'input[type="radio"][name="forn"]'
+        # label vem do grupo, não da primeira opção
+        assert f.label == "Tipo de Fornecimento"
+        assert f.options == ["Materiais", "Serviços", "Materiais e Serviços"]
+
+    async def test_radio_group_without_group_label_uses_first_option(self):
+        """Sem label de grupo, cai no label da primeira opção (comportamento antigo)."""
+        elements = [
+            _make_element(attrs=_attrs(type_="radio", name="q", label="Sim")),
+            _make_element(attrs=_attrs(type_="radio", name="q", label="Não")),
+        ]
+        page = _make_page(*elements)
+
+        fields = await DOMCrawler(page).extract_fields()
+
+        assert len(fields) == 1
+        assert fields[0].label == "Sim"
+        assert fields[0].options == ["Sim", "Não"]
 
     async def test_aria_labelledby_selector_for_spa_fields(self):
         a = _attrs(aria_labelledby="lbl-01", label="Campo SPA")

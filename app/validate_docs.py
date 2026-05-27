@@ -6,6 +6,7 @@ Uso:
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 from pathlib import Path
@@ -34,7 +35,7 @@ def main() -> None:
     print(f"PDFs encontrados: {[p.name for p in pdfs]}\n")
 
     extractor = DocumentExtractor(api_key=_API_KEY)
-    profile = extractor.load_from_directory(_DOCS_DIR)
+    profile = asyncio.run(extractor.load_from_directory(_DOCS_DIR))
 
     print("\n" + "=" * 60)
     print("  COMPANY PROFILE EXTRAIDO")

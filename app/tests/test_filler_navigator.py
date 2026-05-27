@@ -95,7 +95,7 @@ class TestFormFillerTextInput:
         failures = await filler.fill_page(_make_page([field]), session)
 
         assert failures == []
-        locator.type.assert_awaited_once_with("VALOR_FAKE", delay=40)
+        locator.type.assert_awaited_once_with("VALOR_FAKE", delay=40, timeout=8_000)
 
     @pytest.mark.asyncio
     async def test_fill_email_field(self):
@@ -109,7 +109,7 @@ class TestFormFillerTextInput:
         failures = await filler.fill_page(_make_page([field]), session)
 
         assert failures == []
-        locator.type.assert_awaited_once_with("contato@empresa.com", delay=40)
+        locator.type.assert_awaited_once_with("contato@empresa.com", delay=40, timeout=8_000)
 
 
 class TestFormFillerSelect:
@@ -153,12 +153,17 @@ class TestFormFillerCheckbox:
         session = _make_session([field], {"#aceito": True})
         page = _make_mock_page()
         locator = _make_mock_locator()
+        # is_checked retorna False — força o filler a clicar para marcar
+        locator.is_checked = AsyncMock(return_value=False)
         page.locator = MagicMock(return_value=locator)
 
         filler = FormFiller(page)
         await filler.fill_page(_make_page([field]), session)
 
-        locator.check.assert_awaited_once()
+        # _fill_checkbox usa evaluate("el => el.click()") em vez de check()
+        # para funcionar em SPAs React onde o input fica oculto.
+        locator.evaluate.assert_awaited()
+        assert "el.click()" in str(locator.evaluate.call_args)
 
     @pytest.mark.asyncio
     async def test_checkbox_unchecked_when_false(self):
@@ -166,12 +171,79 @@ class TestFormFillerCheckbox:
         session = _make_session([field], {"#aceito": False})
         page = _make_mock_page()
         locator = _make_mock_locator()
+        # is_checked retorna True — força o filler a desmarcar via evaluate
+        locator.is_checked = AsyncMock(return_value=True)
         page.locator = MagicMock(return_value=locator)
 
         filler = FormFiller(page)
         await filler.fill_page(_make_page([field]), session)
 
-        locator.uncheck.assert_awaited_once()
+        locator.evaluate.assert_awaited()
+        assert "el.checked" in str(locator.evaluate.call_args)
+
+    @pytest.mark.asyncio
+    async def test_checkbox_freetext_value_not_matching_label_stays_unchecked(self):
+        """Grupo de seleção múltipla: valor de texto livre (ex: CNAE) que não
+        bate com a label do checkbox NÃO deve marcar a opção. Caso real: 183
+        checkboxes de categorias de produto recebendo o mesmo atividade_empresa."""
+        field = FormField(
+            selector='input[type="checkbox"][name="grp"][value="ROLAMENTOS"]',
+            label="ROLAMENTOS",
+            tag="input",
+            field_type=FieldType.CHECKBOX,
+            semantic_type=SemanticType.ATIVIDADE,
+            name="grp",
+        )
+        session = _make_session([field], {field.selector: "Pesquisa e desenvolvimento experimental"})
+        page = _make_mock_page()
+        locator = _make_mock_locator()
+        locator.is_checked = AsyncMock(return_value=False)
+        page.locator = MagicMock(return_value=locator)
+
+        filler = FormFiller(page)
+        await filler.fill_page(_make_page([field]), session)
+
+        # Não deve ter clicado (nenhum evaluate de marcação)
+        locator.evaluate.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_checkbox_freetext_value_matching_label_gets_checked(self):
+        """Quando o valor casa com a label do checkbox, marca a opção."""
+        field = FormField(
+            selector='input[type="checkbox"][name="grp"][value="ROLAMENTOS"]',
+            label="ROLAMENTOS, MANCAIS E BUCHAS",
+            tag="input",
+            field_type=FieldType.CHECKBOX,
+            semantic_type=SemanticType.ATIVIDADE,
+            name="grp",
+        )
+        session = _make_session([field], {field.selector: "ROLAMENTOS"})
+        page = _make_mock_page()
+        locator = _make_mock_locator()
+        locator.is_checked = AsyncMock(return_value=False)
+        page.locator = MagicMock(return_value=locator)
+
+        filler = FormFiller(page)
+        await filler.fill_page(_make_page([field]), session)
+
+        locator.evaluate.assert_awaited()
+        assert "el.click()" in str(locator.evaluate.call_args)
+
+    @pytest.mark.asyncio
+    async def test_checkbox_affirmative_string_gets_checked(self):
+        """Valor afirmativo explícito (true/sim) marca mesmo sem casar label."""
+        field = _make_field(selector="#doc", field_type=FieldType.CHECKBOX, semantic_type=SemanticType.DOCUMENTO_PDF)
+        session = _make_session([field], {"#doc": "true"})
+        page = _make_mock_page()
+        locator = _make_mock_locator()
+        locator.is_checked = AsyncMock(return_value=False)
+        page.locator = MagicMock(return_value=locator)
+
+        filler = FormFiller(page)
+        await filler.fill_page(_make_page([field]), session)
+
+        locator.evaluate.assert_awaited()
+        assert "el.click()" in str(locator.evaluate.call_args)
 
 
 class TestFormFillerFile:

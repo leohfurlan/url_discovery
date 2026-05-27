@@ -37,6 +37,13 @@ class DOMCrawler:
         count = await locator.count()
         fields: list[FormField] = []
 
+        # Dedupe radios e agrega labels de opções: vários <input type="radio">
+        # com o mesmo `name` formam UM grupo e compartilham o mesmo seletor —
+        # tratar como FormFields separados gera classificações redundantes
+        # (ex: cada label "Materiais"/"Serviços" classificada isoladamente) e
+        # logs duplicados em fill_page. Mantém o primeiro como representante
+        # do grupo, agregando demais labels em `options`.
+        radio_groups: dict[str, FormField] = {}
         for i in range(count):
             el = locator.nth(i)
             try:
@@ -72,15 +79,46 @@ class DOMCrawler:
                         }
                         // Fallback: aria-label (pode ser genérico como "Single line text")
                         if (!labelText) labelText = el.getAttribute('aria-label') || '';
+
+                        // Label do GRUPO (radiogroup / fieldset) — mais informativo que
+                        // o label da opção individual quando se quer classificar o que
+                        // a pergunta está pedindo (ex: "Tipo de Fornecimento" em vez
+                        // de "Materiais"). Usado para radios e para checkbox groups.
+                        let groupLabel = '';
+                        const t = (el.type || '').toLowerCase();
+                        if (t === 'radio' || t === 'checkbox') {
+                            const grp = el.closest('[role="radiogroup"], [role="group"], fieldset');
+                            if (grp) {
+                                const grpAria = grp.getAttribute('aria-labelledby') || '';
+                                if (grpAria) {
+                                    groupLabel = grpAria.trim().split(/\s+/)
+                                        .map(id => {
+                                            const el2 = document.getElementById(id);
+                                            return el2 ? el2.textContent.trim() : '';
+                                        })
+                                        .filter(t => t)
+                                        .join(' ');
+                                }
+                                if (!groupLabel) {
+                                    const legend = grp.querySelector('legend');
+                                    if (legend) groupLabel = legend.textContent.trim();
+                                }
+                                if (!groupLabel) {
+                                    groupLabel = grp.getAttribute('aria-label') || '';
+                                }
+                            }
+                        }
+
                         return {
                             tag: el.tagName.toLowerCase(),
-                            type: (el.type || '').toLowerCase(),
+                            type: t,
                             name: el.name || '',
                             id: el.id || '',
                             value: el.value || '',
                             placeholder: el.placeholder || '',
                             required: el.required || false,
                             label: labelText,
+                            groupLabel: groupLabel,
                             ariaLabelledby: ariaLabelledby,
                             options: el.tagName === 'SELECT'
                                 ? Array.from(el.options)
@@ -103,11 +141,53 @@ class DOMCrawler:
             if not selector:
                 continue
 
+            # Radio: agrega no grupo já visto em vez de criar FormField duplicado.
+            # Todos os radios de um mesmo `name` compartilham o seletor de grupo,
+            # então qualquer um deles é suficiente para preencher; só agrego
+            # labels para enriquecer a classificação.
+            if field_type == FieldType.RADIO:
+                existing = radio_groups.get(selector)
+                if existing is not None:
+                    if attrs["label"] and attrs["label"] not in existing.options:
+                        existing.options.append(attrs["label"])
+                    continue
+                group_label = attrs.get("groupLabel") or ""
+                effective_label = group_label or attrs["label"]
+                options_init = [attrs["label"]] if attrs["label"] else []
+                radio_field = FormField(
+                    tag=attrs["tag"],
+                    field_type=field_type,
+                    label=effective_label or None,
+                    name=attrs["name"] or None,
+                    id=attrs["id"] or None,
+                    placeholder=attrs["placeholder"] or None,
+                    required=bool(attrs["required"]),
+                    selector=selector,
+                    options=options_init,
+                )
+                radio_groups[selector] = radio_field
+                fields.append(radio_field)
+                continue
+
+            # Checkbox em grupo de seleção múltipla: prefere o label do grupo
+            # como contexto da classificação. Cada checkbox segue como FormField
+            # próprio (seletor único via [value=...]) para que o FormFiller possa
+            # marcar/desmarcar individualmente. Label efetivo combina grupo+opção
+            # quando ambos existem, permitindo que o classificador veja a pergunta
+            # ("Quais materiais sua empresa fornece?") junto da opção ("ROLAMENTOS").
+            effective_label = attrs["label"] or None
+            if field_type == FieldType.CHECKBOX:
+                group_label = attrs.get("groupLabel") or ""
+                if group_label and attrs["label"] and group_label != attrs["label"]:
+                    effective_label = f"{group_label} — {attrs['label']}"
+                elif group_label and not attrs["label"]:
+                    effective_label = group_label
+
             fields.append(
                 FormField(
                     tag=attrs["tag"],
                     field_type=field_type,
-                    label=attrs["label"] or None,
+                    label=effective_label,
                     name=attrs["name"] or None,
                     id=attrs["id"] or None,
                     placeholder=attrs["placeholder"] or None,
