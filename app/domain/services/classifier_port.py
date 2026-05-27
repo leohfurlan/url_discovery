@@ -63,6 +63,40 @@ class ClassifierPort(ABC):
         """
         raise NotImplementedError
 
+    async def choose_option(self, field: FormField, profile_summary: str = "") -> str | None:
+        """Escolhe a melhor opcao para um campo de escolha nao classificado.
+
+        Fallback usado pelo orquestrador quando ``semantic_type`` ficou ``UNKNOWN``
+        para um radio/select com mais de duas opcoes (ex.: "Tipo de Fornecedor",
+        "Porte de Empresa"), evitando o chute cego em "Nao". Recebe o campo (com
+        ``options``) e um resumo do perfil da empresa; deve retornar o texto de
+        UMA das opcoes ou ``None`` quando nao houver correspondencia segura.
+
+        Implementacao padrao nao decide (retorna ``None``). Adapters com LLM
+        sobrescrevem.
+        """
+        return None
+
+    async def choose_options(
+        self,
+        group_label: str,
+        options: list[str],
+        profile_summary: str = "",
+        max_select: int = 3,
+    ) -> list[int]:
+        """Seleciona quais opcoes marcar num grupo grande de checkboxes.
+
+        Usado pelo orquestrador quando um grupo de checkboxes tem muitas opcoes
+        (ex.: "Categoria de Fornecimento" com 150 itens). Em vez de classificar
+        item a item — o que marcava tudo —, faz UMA decisao com base na atividade
+        da empresa, retornando os indices das opcoes compativeis (no maximo
+        ``max_select``). Lista vazia significa "nenhuma se aplica".
+
+        Implementacao padrao nao seleciona nada (retorna ``[]``). Adapters com
+        LLM sobrescrevem.
+        """
+        return []
+
     @staticmethod
     def unknown(field: FormField) -> FormField:
         """Cria uma copia do campo marcada como nao classificada."""
@@ -102,13 +136,17 @@ class ClassifierPort(ABC):
                 )
 
             classified_snapshot = classified.model_dump()
+            # semantic_type é o resultado da classificação; confidence e
+            # classification_source são instrumentação preenchida depois (Ajuste 4)
+            # e também podem divergir do snapshot original.
+            mutable_keys = {"semantic_type", "confidence", "classification_source"}
             original_without_semantics = {
-                key: value for key, value in original.items() if key != "semantic_type"
+                key: value for key, value in original.items() if key not in mutable_keys
             }
             classified_without_semantics = {
                 key: value
                 for key, value in classified_snapshot.items()
-                if key != "semantic_type"
+                if key not in mutable_keys
             }
 
             if classified_without_semantics != original_without_semantics:

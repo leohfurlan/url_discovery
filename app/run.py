@@ -21,7 +21,6 @@ import asyncio
 import logging
 import os
 import sys
-from datetime import datetime
 from pathlib import Path
 
 import structlog
@@ -37,8 +36,7 @@ if str(_APP_DIR) not in sys.path:
 
 logger = structlog.get_logger(__name__)
 
-# Diretório padrão para logs de sessão (relativo à raiz do projeto).
-_LOG_DIR = _APP_DIR.parent / "logs"
+from infrastructure.audit.audit_session import AuditSession  # noqa: E402
 
 
 def _configure_logging(log_file: Path | None) -> None:
@@ -62,6 +60,13 @@ def _configure_logging(log_file: Path | None) -> None:
         handlers=handlers,
         force=True,
     )
+
+    # Silencia ruído de INFO de bibliotecas de terceiros que não é da nossa
+    # execução: o SDK google-genai loga "AFC is enabled with max remote calls"
+    # a cada chamada (AFC = Automatic Function Calling, recurso de tool-calling
+    # que não usamos) e o httpx loga cada requisição HTTP.
+    for noisy in ("google_genai", "google.genai", "httpx", "httpcore"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
 
     structlog.configure(
         processors=[
@@ -89,9 +94,12 @@ def main(
     slow_fill: bool = typer.Option(False, "--slow-fill", help="Delay extra entre campos (portais sensíveis a timing)"),
     max_pages: int = typer.Option(15, "--max-pages", help="Limite de páginas do formulário"),
     iframe: str | None = typer.Option(None, "--iframe", help="Seletor CSS do iframe, se já conhecido (pula a discovery)"),
-    screenshot_dir: str | None = typer.Option(None, "--screenshots", help="Diretório para salvar screenshots (padrão: /tmp)"),
+    audit_dir: Path | None = typer.Option(None, "--audit-dir", help="Raiz dos artefatos de auditoria (padrão: ./audit). Logs e screenshots vão para <audit-dir>/<portal>/<timestamp>/"),
+    per_question_shots: bool = typer.Option(True, "--per-question-shots/--no-per-question-shots", help="Tira 1 screenshot por pergunta preenchida (cobertura 100%). Padrão: ativado"),
     model: str = typer.Option("gemma-4-26b-a4b-it", "--model", help="Modelo Gemma para classificação semântica e extração de documentos"),
     docs_dir: Path | None = typer.Option(None, "--docs-dir", help="Diretório com PDFs reais (Cartão CNPJ, Contrato Social, Demonstrações Financeiras)"),
+    supplier_kind: str | None = typer.Option(None, "--supplier-kind", help="Tipo de fornecimento: materiais | servicos | ambos (ajuda na classificação de fornecedor e categorias)"),
+    supplier_desc: str | None = typer.Option(None, "--supplier-desc", help="Descrição curta do que a empresa fornece"),
     no_cache: bool = typer.Option(False, "--no-cache", help="Força reprocessamento dos PDFs mesmo que cache esteja disponível"),
     clear_cls_cache: bool = typer.Option(False, "--clear-cls-cache", help="Limpa o cache de classificação semântica (~/.url_discovery/cls_cache.json) antes de iniciar"),
     submit: bool = typer.Option(None, "--submit/--no-submit", help="Submete o formulário após preencher (sobrescreve ALLOW_FORM_SUBMIT do .env)"),
@@ -104,16 +112,18 @@ def main(
     mas NÃO clica em Submit. Use --submit ou ALLOW_FORM_SUBMIT=true apenas
     em produção, após validar os dados gerados para o portal.
     """
+    # Sessão de auditoria: logs e screenshots desta execução ficam juntos em
+    # <audit-dir>/<portal>/<timestamp>/ (ex: audit/jaguar-mining/20260527_143000/).
+    audit = AuditSession(portal=portal, base_dir=audit_dir)
+    audit.setup()
+
     # Configura logging ANTES de qualquer log estruturado para garantir que
     # o arquivo recebe a sessão inteira (incluindo as mensagens de setup).
     resolved_log_path: Path | None = None
     if log_file:
-        if log_file_path is not None:
-            resolved_log_path = log_file_path
-        else:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            resolved_log_path = _LOG_DIR / f"{portal}_{timestamp}.log"
+        resolved_log_path = log_file_path if log_file_path is not None else audit.log_path
     _configure_logging(resolved_log_path)
+    typer.echo(f"→ Auditoria desta execução: {audit.root}")
     if resolved_log_path is not None:
         typer.echo(f"→ Log da sessão será salvo em: {resolved_log_path}")
 
@@ -137,17 +147,50 @@ def main(
         else:
             typer.echo("→ Cache de classificação não encontrado (já estava limpo).")
 
+    supplier_kind, supplier_desc = _collect_supplier_info(supplier_kind, supplier_desc)
+
     try:
         report = asyncio.run(
-            _run(url, portal, headless, slow_fill, max_pages, iframe, screenshot_dir, model, allow_submit, docs_dir, no_cache)
+            _run(url, portal, headless, slow_fill, max_pages, iframe, audit, per_question_shots, model, allow_submit, docs_dir, no_cache, supplier_kind, supplier_desc)
         )
-        _print_report(report, portal)
+        _print_report(report, portal, audit)
         raise typer.Exit(code=0 if report.result.name == "SUCCESS" else 1)
     except (KeyboardInterrupt, typer.Exit):
         raise
     except Exception as exc:
         typer.echo(f"\nErro fatal: {exc}", err=True)
         raise typer.Exit(code=1)
+
+
+_SUPPLIER_KINDS = {
+    "materiais": "materiais", "material": "materiais", "produtos": "materiais",
+    "servicos": "serviços", "serviços": "serviços", "serviço": "serviços", "servico": "serviços",
+    "ambos": "ambos", "materiais e servicos": "ambos", "materiais e serviços": "ambos",
+}
+
+
+def _normalize_supplier_kind(value: str | None) -> str | None:
+    """Normaliza a entrada do tipo de fornecedor para materiais|serviços|ambos."""
+    if not value:
+        return None
+    return _SUPPLIER_KINDS.get(value.strip().lower(), value.strip())
+
+
+def _collect_supplier_info(
+    supplier_kind: str | None, supplier_desc: str | None
+) -> tuple[str | None, str | None]:
+    """Normaliza o contexto de fornecedor vindo das flags --supplier-kind/--supplier-desc.
+
+    É totalmente opcional: se as flags não forem passadas, o agente roda sem esse
+    contexto e sem nenhum prompt — não interrompe execuções manuais nem agendadas.
+    Quando informado, melhora a escolha de "Classificação de Fornecedor" e a
+    seleção de categorias/serviços (a correção ciente das opções funciona mesmo
+    sem ele)."""
+    supplier_kind = _normalize_supplier_kind(supplier_kind)
+    supplier_desc = (supplier_desc or "").strip() or None
+    if supplier_kind or supplier_desc:
+        typer.echo(f"→ Fornecedor: tipo={supplier_kind or '—'} | descrição={supplier_desc or '—'}")
+    return supplier_kind, supplier_desc
 
 
 async def _run(
@@ -157,13 +200,17 @@ async def _run(
     slow_fill: bool,
     max_pages: int,
     iframe_selector: str | None,
-    screenshot_dir: str | None,
+    audit: AuditSession,
+    per_question_shots: bool,
     model: str,
     allow_submit: bool,
     docs_dir: Path | None = None,
     no_cache: bool = False,
+    supplier_kind: str | None = None,
+    supplier_desc: str | None = None,
 ):
     from playwright.async_api import async_playwright
+    from domain.entities.company_profile import CompanyProfile
     from infrastructure.llm.gemma_adapter import GemmaClassifier
     from domain.services.generator import DataGenerator
     from domain.services.document_extractor import DocumentExtractor
@@ -186,6 +233,17 @@ async def _run(
             else:
                 typer.echo(f"→ Perfil carregado: {profile.razao_social or '—'} / CNPJ: {profile.cnpj or '—'}")
                 _check_minimum_fields(profile)
+
+    # Anexa o contexto de fornecedor informado pelo usuário ao perfil (não vem
+    # de PDF). Cria um perfil mínimo se não houver documentos — assim o
+    # profile_summary chega ao LLM mesmo sem --docs-dir.
+    if supplier_kind or supplier_desc:
+        if profile is None:
+            profile = CompanyProfile()
+        profile = profile.model_copy(update={
+            "supplier_kind": supplier_kind,
+            "supplier_description": supplier_desc,
+        })
 
     # ── 2. Navegação e preenchimento ──────────────────────────────────────────
     async with async_playwright() as p:
@@ -226,8 +284,10 @@ async def _run(
             iframe_selector=active_iframe,
             slow_fill=slow_fill,
             max_pages=max_pages,
-            screenshot_dir=screenshot_dir,
+            audit=audit,
+            per_question_shots=per_question_shots,
             allow_submit=allow_submit,
+            profile=profile,
         )
 
         typer.echo("→ Iniciando preenchimento...")
@@ -258,13 +318,17 @@ def _check_minimum_fields(profile) -> None:
         typer.echo("✓  Todos os campos essenciais extraídos dos documentos.")
 
 
-def _print_report(report, portal: str) -> None:
+def _print_report(report, portal: str, audit: AuditSession | None = None) -> None:
     width = 52
     typer.echo("\n" + "=" * width)
     typer.echo(f"  Portal : {portal}")
     typer.echo(f"  Resultado : {report.result.name}")
     typer.echo(f"  URL final : {report.final_url}")
     typer.echo(f"  Páginas   : {len(report.steps)}")
+    if audit is not None:
+        typer.echo(f"  Auditoria : {audit.root}")
+        n_shots = len(report.session.screenshots) if report.session else 0
+        typer.echo(f"  Screenshots: {n_shots}  (veja README.md / manifest.json)")
     typer.echo("-" * width)
     for step in report.steps:
         mark = "✓" if not step.failures else "⚠"
@@ -275,6 +339,15 @@ def _print_report(report, portal: str) -> None:
         )
         if step.screenshot:
             typer.echo(f"           screenshot: {step.screenshot}")
+
+    review = getattr(report, "requires_human_review", [])
+    if review:
+        typer.echo("-" * width)
+        typer.echo(f"  ⚑ Revisão humana sugerida ({len(review)}):")
+        for f in review:
+            label = (f.label or f.selector)[:60]
+            typer.echo(f"      - {label}")
+
     if report.error:
         typer.echo(f"  Erro: {report.error}", err=True)
     typer.echo("=" * width + "\n")

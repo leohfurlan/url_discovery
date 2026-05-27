@@ -1,5 +1,5 @@
-from domain.entities.form import SemanticType
-from domain.services.generator import generate
+from domain.entities.form import FieldType, FormField, SemanticType
+from domain.services.generator import DataGenerator, generate
 
 
 def test_gera_cnpj_formatado():
@@ -42,3 +42,23 @@ def test_gera_aceite_termos():
 def test_fallback_unknown():
     valor = generate(SemanticType.UNKNOWN)
     assert len(valor) > 0
+
+
+def test_texto_livre_fica_em_branco():
+    # Comentários, observações, "top clientes" etc. não devem ser inventados.
+    assert generate(SemanticType.TEXTO_LIVRE) == ""
+
+
+def _f(field_type: FieldType) -> FormField:
+    return FormField(tag="input", field_type=field_type, label="x", selector="#x")
+
+
+def test_datagenerator_radio_unknown_retorna_nao():
+    gen = DataGenerator(profile=None)
+    assert gen.generate(SemanticType.UNKNOWN, field=_f(FieldType.RADIO)) == "Não"
+
+
+def test_datagenerator_checkbox_unknown_retorna_false():
+    # Checkbox isolado sem classificação fica desmarcado, sem palavra fake.
+    gen = DataGenerator(profile=None)
+    assert gen.generate(SemanticType.UNKNOWN, field=_f(FieldType.CHECKBOX)) == "false"

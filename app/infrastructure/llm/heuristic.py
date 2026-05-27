@@ -10,7 +10,11 @@ from __future__ import annotations
 import re
 from domain.entities.form import FieldType, FormField, SemanticType
 
-# Classificações que nunca fazem sentido em campos de texto longo (textarea)
+# Classificações que nunca fazem sentido em campos de texto longo (textarea).
+# Um textarea ("Descreva...", "Justifique...") é uma resposta aberta — qualquer
+# match com dado estruturado curto é ruído de keyword, não a intenção do campo.
+# Sem isso, a pergunta 20 ("Descreva seu programa de integridade") era classificada
+# como `endereco` só porque o enunciado continha a palavra "endereço".
 _TEXTAREA_BLOCKED: set[SemanticType] = {
     SemanticType.EMAIL_CORPORATIVO,
     SemanticType.EMAIL_GENERICO,
@@ -18,6 +22,21 @@ _TEXTAREA_BLOCKED: set[SemanticType] = {
     SemanticType.CPF,
     SemanticType.CEP,
     SemanticType.TELEFONE,
+    SemanticType.ENDERECO,
+    SemanticType.LOGRADOURO,
+    SemanticType.NUMERO_ENDERECO,
+    SemanticType.COMPLEMENTO,
+    SemanticType.BAIRRO,
+    SemanticType.CIDADE,
+    SemanticType.ESTADO,
+    SemanticType.PAIS,
+    SemanticType.AGENCIA,
+    SemanticType.CONTA,
+    SemanticType.BANCO,
+    SemanticType.FAVORECIDO,
+    SemanticType.INSCRICAO_EST,
+    SemanticType.INSCRICAO_MUN,
+    SemanticType.CPF_SOCIO,
 }
 
 # Tuplas (padrão compilado, SemanticType).
@@ -36,7 +55,10 @@ _RULES: list[tuple[re.Pattern, SemanticType]] = [
     # a ordem garante que o mais específico vence.
     (re.compile(r'\b(nome\s+fantasia|nome\s+de\s+fantasia|nome\s+comercial|trade\s+name|fantasia)\b', re.I), SemanticType.NOME_FANTASIA),
     (re.compile(r'\b(raz[aã]o\s+social|nome\s+da\s+empresa|company\s+name|denomina[cç][aã]o)\b', re.I),     SemanticType.RAZAO_SOCIAL),
-    (re.compile(r'\b(atividade|cnae|ramo\s+de\s+atividade|segmento|setor)\b', re.I),                         SemanticType.ATIVIDADE),
+    # "atividades?" cobre singular e plural: "Atividade Principal" e
+    # "Descrição das Atividades" (sem o ?, o \b falhava no plural e o campo
+    # caía em texto_livre, sendo preenchido com frase fake em vez do CNAE).
+    (re.compile(r'\b(atividades?|cnae|ramo\s+de\s+atividades?|segmento|setor)\b', re.I),                     SemanticType.ATIVIDADE),
 
     # ── Contato ───────────────────────────────────────────────────────────
     (re.compile(r'\be-?mail\b', re.I),                        SemanticType.EMAIL_CORPORATIVO),
@@ -86,6 +108,33 @@ _BINARY_YES_NO_OPTION_SETS: tuple[frozenset[str], ...] = (
     frozenset({"true", "false"}),
 )
 
+# Enunciados de aceite/declaração/consentimento. Em campos de escolha
+# (radio/checkbox) a intenção é confirmar, não coletar dado estrutural —
+# por isso tem prioridade sobre keywords como "agência" ou "representante
+# legal" que aparecem no meio da pergunta (ex.: "Declaro estar ciente, na
+# condição de representante legal, que...").
+#
+# IMPORTANTE: só verbos de compromisso em PRIMEIRA PESSOA (declaro, aceito,
+# concordo, autorizo, consinto) e termos de consentimento. NÃO inclui "ciente"
+# isolado: ele é ambíguo — aparece tanto em declaração ("Declaro estar ciente")
+# quanto em pergunta de compliance ("Você está ciente de ALGUMA questão...?"),
+# onde marcar "Sim" seria perigoso. A Q4 ("Declaro estar ciente...") continua
+# casando por "declaro"; a Q9 ("Você está ciente de alguma questão...") cai como
+# binário → UNKNOWN → "Não".
+_ACEITE_PATTERN = re.compile(
+    r'\b(concord[oa]|aceit[oa]|declaro|declara[cç][aã]o|consinto|'
+    r'consentimento|autorizo|termos\s+e\s+condi[cç][oõ]es)\b',
+    re.I,
+)
+
+
+def _is_binary_yes_no(field: FormField) -> bool:
+    """True se o campo é um radio cujas opções são exatamente Sim/Não (ou equivalentes)."""
+    if field.field_type != FieldType.RADIO or not field.options:
+        return False
+    options_norm = frozenset(o.strip().lower() for o in field.options)
+    return options_norm in _BINARY_YES_NO_OPTION_SETS
+
 
 def heuristic_classify(field: FormField) -> SemanticType | None:
     """Tenta classificar o campo por heurística de texto. Retorna None se incerto."""
@@ -96,21 +145,26 @@ def heuristic_classify(field: FormField) -> SemanticType | None:
         " ".join(field.options),
     ]))
     is_textarea = field.field_type == FieldType.TEXTAREA
+    is_choice = field.field_type in (FieldType.RADIO, FieldType.CHECKBOX)
+
+    # Campo de escolha cujo enunciado é uma declaração/aceite: confirma intenção,
+    # não coleta dado. Tem prioridade sobre as regras estruturais abaixo para
+    # evitar matches espúrios (ex.: pergunta 4 "Declaro estar ciente... na condição
+    # de representante legal" virava NOME_SOCIO por causa de "representante legal").
+    if is_choice and _ACEITE_PATTERN.search(text):
+        return SemanticType.ACEITE_TERMOS
+
+    # Radio binário Sim/Não sem aceite detectado → UNKNOWN. Bloqueia que uma
+    # keyword estrutural no texto da pergunta de compliance (ex.: "agência
+    # reguladora", "prestação de serviço") seja classificada como agencia_bancaria
+    # ou nome_pessoa. O DataGenerator trata RADIO + UNKNOWN com o padrão "Não".
+    if _is_binary_yes_no(field):
+        return SemanticType.UNKNOWN
+
     for pattern, semantic in _RULES:
         if is_textarea and semantic in _TEXTAREA_BLOCKED:
             continue
         if pattern.search(text):
             return semantic
-
-    # Fallback: radio binário Sim/Não sem semântica detectada → resolvido
-    # localmente como UNKNOWN. O DataGenerator (generator.py) trata
-    # RADIO + UNKNOWN retornando "Não", padrão conservador apropriado
-    # para questionários de compliance/integridade.
-    # Vem por último para não atropelar ACEITE_TERMOS em perguntas como
-    # "Concorda com os termos?" + options=["Sim", "Não"].
-    if field.field_type == FieldType.RADIO and field.options:
-        options_norm = frozenset(o.strip().lower() for o in field.options)
-        if options_norm in _BINARY_YES_NO_OPTION_SETS:
-            return SemanticType.UNKNOWN
 
     return None

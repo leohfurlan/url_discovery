@@ -93,7 +93,10 @@ def generate(semantic_type: SemanticType) -> str:
             return "true"
 
         case SemanticType.TEXTO_LIVRE:
-            return fake.sentence(nb_words=6)
+            # Campos de texto aberto (comentários, observações, "top clientes",
+            # descrições livres) ficam em branco — preferimos não inventar
+            # informação a preencher com texto fake.
+            return ""
 
         case SemanticType.FAVORECIDO:
             return fake.name()
@@ -157,6 +160,17 @@ class DataGenerator:
             and field.field_type == FieldType.RADIO
         ):
             return "Não"
+
+        # Checkbox sem classificação útil: deixa desmarcado em vez de gerar um
+        # valor fake (palavra solta), que poluía o log e nunca marcava a caixa.
+        # Grupos de checkbox são resolvidos antes, no orquestrador; aqui cobrimos
+        # o checkbox isolado que não é aceite nem documento.
+        if (
+            semantic_type in (SemanticType.UNKNOWN, SemanticType.DESCONHECIDO)
+            and field is not None
+            and field.field_type == FieldType.CHECKBOX
+        ):
+            return "false"
 
         # Partes de endereço — usa parsing do perfil com coerência de sessão
         if semantic_type in (

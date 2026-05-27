@@ -72,6 +72,12 @@ class CompanyProfile(BaseModel):
     faturamento_anual:  str | None = None
     periodo_referencia: str | None = None
 
+    # ── Contexto informado pelo usuário (não vem de PDF) ──────────────────────
+    # Ajuda o LLM a decidir "Classificação de Fornecedor" e a seleção de
+    # categorias/serviços, que o CNAE sozinho não cobre bem.
+    supplier_kind:        str | None = None   # "materiais" | "servicos" | "ambos"
+    supplier_description: str | None = None   # descrição curta do que a empresa fornece
+
     def get(self, semantic_type: object) -> str | None:
         """Retorna o valor real para um SemanticType, ou None se não disponível."""
         key = semantic_type.value if hasattr(semantic_type, "value") else str(semantic_type)
@@ -91,6 +97,13 @@ class CompanyProfile(BaseModel):
         other_data = other.model_dump()
         merged = {k: (self_data[k] if self_data[k] is not None else other_data[k]) for k in self_data}
         return CompanyProfile(**merged)
+
+    def summary(self) -> str:
+        """Resumo compacto dos campos preenchidos, para dar contexto ao LLM
+        em decisões de fallback (ex.: escolher 'Porte de Empresa' coerente com
+        o faturamento, ou 'Tipo de Fornecedor' coerente com a atividade)."""
+        data = self.model_dump()
+        return "; ".join(f"{k}: {v}" for k, v in data.items() if v)
 
     def is_empty(self) -> bool:
         return all(v is None for v in self.model_dump().values())

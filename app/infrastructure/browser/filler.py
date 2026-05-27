@@ -102,6 +102,8 @@ class FormFiller:
                     selector=field.selector,
                     field_type=field.field_type,
                     semantic=field.semantic_type,
+                    confidence=field.confidence,
+                    classification_source=field.classification_source,
                     label=(field.label or "")[:60] or None,
                     value=str(value)[:80] if value is not None else None,
                 )
@@ -114,12 +116,74 @@ class FormFiller:
 
         return failures
 
-    async def take_screenshot(self, name: str = "screenshot") -> Path:
-        """Tira screenshot da página atual e salva em /tmp."""
-        path = Path(tempfile.gettempdir()) / f"{name}.png"
+    async def take_screenshot(self, name: str = "screenshot", dest: Path | None = None) -> Path:
+        """Tira screenshot full page da página atual.
+
+        Se `dest` for informado, salva nesse caminho (criando o diretório se
+        necessário); caso contrário cai no diretório temporário do sistema.
+        """
+        path = dest if dest is not None else Path(tempfile.gettempdir()) / f"{name}.png"
+        path.parent.mkdir(parents=True, exist_ok=True)
         await self._page.screenshot(path=str(path), full_page=True)
         logger.info("screenshot_saved", path=str(path))
         return path
+
+    async def screenshot_field(self, field: FormField, dest: Path) -> bool:
+        """Captura um screenshot focado em UMA pergunta preenchida.
+
+        Estratégia: rola o campo até o centro da viewport, destaca-o com um
+        contorno temporário (para deixar claro qual pergunta a imagem registra)
+        e tira um screenshot da viewport — assim o rótulo, o campo e a resposta
+        aparecem juntos, mesmo quando o input em si é oculto por CSS (radios /
+        checkboxes de SPAs como o Microsoft Forms).
+
+        Retorna True se o screenshot foi gravado; False (com aviso no log) se o
+        campo não pôde ser localizado/rolado — nunca propaga exceção, para não
+        interromper o preenchimento por causa de uma evidência.
+        """
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            locator = self._resolve_locator(field.selector).first
+            if await locator.count() == 0:
+                logger.warning("question_screenshot_skipped", selector=field.selector, reason="not_in_dom")
+                return False
+
+            # Centraliza o campo na viewport. scroll_into_view_if_needed cobre o
+            # caso comum; o fallback via JS funciona mesmo para inputs ocultos.
+            try:
+                await locator.scroll_into_view_if_needed(timeout=self._timeout)
+            except Exception:
+                try:
+                    await locator.evaluate("el => el.scrollIntoView({block: 'center', inline: 'nearest'})")
+                except Exception:
+                    pass
+
+            highlighted = False
+            try:
+                await locator.evaluate(
+                    "el => { el.dataset.__auditOutline = el.style.outline || '';"
+                    " el.style.outline = '3px solid #ff3b30'; el.style.outlineOffset = '2px'; }"
+                )
+                highlighted = True
+            except Exception:
+                pass  # input oculto não aceita outline — segue sem destaque
+
+            await self._page.screenshot(path=str(dest))
+
+            if highlighted:
+                try:
+                    await locator.evaluate(
+                        "el => { el.style.outline = el.dataset.__auditOutline || '';"
+                        " delete el.dataset.__auditOutline; }"
+                    )
+                except Exception:
+                    pass
+
+            logger.info("question_screenshot_saved", selector=field.selector, path=str(dest))
+            return True
+        except Exception as exc:
+            logger.warning("question_screenshot_failed", selector=field.selector, error=str(exc))
+            return False
 
     # ------------------------------------------------------------------
     # Roteador interno por FieldType

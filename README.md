@@ -108,7 +108,8 @@ python app\run.py --help
 | `--slow-fill` | `False` | Delay extra entre campos |
 | `--max-pages` | `15` | Limite de páginas do formulário |
 | `--iframe` | auto | Seletor CSS do iframe, se já conhecido |
-| `--screenshots` | `/tmp` | Diretório para salvar screenshots |
+| `--audit-dir` | `./audit` | Raiz dos artefatos de auditoria (logs + screenshots) |
+| `--per-question-shots` / `--no-per-question-shots` | `True` | Tira 1 screenshot por pergunta preenchida (cobertura 100%) |
 | `--model` | `gemma-4-26b-a4b-it` | Modelo Gemma para classificação e extração de documentos |
 | `--docs-dir` | — | Diretório com PDFs reais da empresa — extrai antes de abrir o browser |
 | `--no-cache` | `False` | Força reprocessamento dos PDFs mesmo que cache esteja disponível |
@@ -163,6 +164,36 @@ python app\run.py "https://portal.example.com" empresa --no-submit
 python app\run.py "https://portal.example.com" empresa --submit
 ```
 
+## Auditoria de logs e screenshots
+
+Cada execução grava **todas as evidências no mesmo lugar**: o log estruturado da sessão e os screenshots de cada pergunta preenchida ficam juntos, na pasta do portal.
+
+```
+audit/
+└── jaguar-mining/
+    └── 20260527_143000/          ← uma pasta por execução (timestamp)
+        ├── session.log           ← log estruturado completo da sessão
+        ├── README.md             ← índice legível: pergunta → screenshot
+        ├── manifest.json         ← o mesmo índice em formato máquina-legível
+        └── screenshots/
+            ├── pagina-01.png            ← visão completa da página (full page)
+            ├── p01-q01-razao_social.png ← 1 screenshot por pergunta preenchida
+            ├── p01-q02-cnpj.png
+            └── ...
+```
+
+**Cobertura de 100% das questões.** Além da visão completa de cada página, o agente tira **um screenshot por pergunta preenchida** — o campo é rolado até a viewport, destacado com um contorno e fotografado junto do seu rótulo e do valor preenchido. Grupos de radio/checkbox (ex.: "selecione as categorias") geram uma evidência por grupo, não por opção.
+
+O `manifest.json` registra, por pergunta: rótulo, tipo semântico, valor preenchido, confiança da classificação e o caminho do screenshot — e um resumo de cobertura (`questions`, `captured`, `coverage_pct`). O `README.md` da execução traz a mesma informação em tabela, com links clicáveis para cada imagem.
+
+| Opção | Efeito |
+| --- | --- |
+| `--audit-dir <caminho>` | Muda a raiz dos artefatos (padrão `./audit`) |
+| `--no-per-question-shots` | Mantém só a visão geral por página (mais rápido, sem print por pergunta) |
+| `--log-file-path <arquivo>` | Salva o log fora da pasta de auditoria (screenshots continuam em `audit/`) |
+
+> A pasta `audit/` é ignorada pelo git (saída local de execução, igual aos logs).
+
 ## Controle de Submissão
 
 **Por padrão o agente nunca envia dados.** O pipeline completo roda — descoberta, crawl, classificação, geração de valores e preenchimento — mas o clique no botão final (Submit / Enviar) é bloqueado.
@@ -191,7 +222,7 @@ E o relatório final mostra `Resultado: SUBMIT_BLOCKED` — indicando que o form
    python app\run.py "https://portal.example.com" empresa --submit
    ```
 
-> **Atenção:** antes de habilitar, valide o screenshot gerado (`--screenshots`) para confirmar que os dados estão corretos para o portal específico. O classificador semântico nem sempre acerta 100% dos campos.
+> **Atenção:** antes de habilitar, valide os screenshots gerados na pasta de auditoria (ver seção [Auditoria](#auditoria-de-logs-e-screenshots)) para confirmar que os dados estão corretos para o portal específico. O classificador semântico nem sempre acerta 100% dos campos.
 
 ### Validar extração antes de rodar
 
@@ -243,8 +274,10 @@ app/
     browser/
       portal_discovery.py         PortalDiscovery — encontra o formulário no portal
       crawler.py                  DOMCrawler — extrai campos do DOM com labels
-      filler.py                   FormFiller — preenche campos por tipo
+      filler.py                   FormFiller — preenche campos por tipo + screenshots
       navigator.py                NavigationOrchestrator — fluxo multi-página
+    audit/
+      audit_session.py            AuditSession — logs + screenshots por execução (manifest/README)
     llm/
       gemma_adapter.py            GemmaClassifier — classifica campos (3 estágios: heurística → cache → LLM)
       heuristic.py                Classificação local por regex/keywords (zero chamadas de API)
