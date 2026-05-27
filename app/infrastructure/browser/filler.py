@@ -159,7 +159,7 @@ class FormFiller:
             case FieldType.RADIO:
                 await self._fill_radio(field, str(value))
             case FieldType.CHECKBOX:
-                await self._fill_checkbox(locator, value)
+                await self._fill_checkbox(field, locator, value)
             case FieldType.FILE:
                 await self._fill_file(locator, field, str(value))
             case FieldType.DATE:
@@ -413,11 +413,35 @@ class FormFiller:
         except Exception:
             return False
 
-    async def _fill_checkbox(self, locator: Locator, value: Any) -> None:
-        # String não-vazia e não-explicitamente-falsa → marcar.
+    async def _fill_checkbox(self, field: FormField, locator: Locator, value: Any) -> None:
+        # Booleano: trata diretamente sem ambiguidade.
+        # String: separa três casos:
+        #   - afirmativo explícito (true/sim/yes/1) → marcar
+        #   - falsy explícito (false/não/no/0/"") → desmarcar
+        #   - texto livre (ex: o CNAE da empresa para semantic=atividade_empresa)
+        #     → só marca se o valor casar com a label deste checkbox específico
+        #
+        # Sem esse refinamento, formulários com grupo de checkboxes multi-seleção
+        # (ex: "Quais materiais você fornece?" com 183 opções) ficavam todos
+        # marcados, porque cada opção era classificada como atividade_empresa
+        # e recebia o mesmo CNAE como valor — qualquer string não-falsy passava.
+        _AFFIRMATIVE = {"true", "yes", "sim", "1", "y", "checked"}
         _FALSY = {"false", "não", "nao", "no", "0", "n", ""}
-        if isinstance(value, str):
-            should_check = value.lower().strip() not in _FALSY
+
+        if isinstance(value, bool):
+            should_check = value
+        elif isinstance(value, str):
+            val_norm = value.lower().strip()
+            if val_norm in _FALSY:
+                should_check = False
+            elif val_norm in _AFFIRMATIVE:
+                should_check = True
+            else:
+                label_norm = (field.label or "").lower().strip()
+                if not label_norm:
+                    should_check = False
+                else:
+                    should_check = val_norm in label_norm or label_norm in val_norm
         else:
             should_check = bool(value)
 
