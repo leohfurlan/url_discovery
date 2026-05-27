@@ -114,6 +114,7 @@ class NavigationResult(Enum):
     MAX_PAGES_REACHED = auto()
     NEXT_BUTTON_NOT_FOUND = auto()
     SUBMIT_BLOCKED = auto()   # ALLOW_FORM_SUBMIT=false — campos preenchidos, Submit não clicado
+    STUCK_PAGE = auto()       # cliquei "Avançar" mas a mesma página reapareceu (obrigatório não satisfeito)
     FILL_ERRORS = auto()
     EXCEPTION = auto()
 
@@ -194,6 +195,9 @@ class NavigationOrchestrator:
         """
         session = FormSession(current_page=1)
         report = RunReport(result=NavigationResult.SUCCESS, session=session)
+        # Assinatura (conjunto de seletores) da última página processada — usada
+        # para detectar que clicamos "Avançar" mas a mesma página reapareceu.
+        previous_signature: frozenset[str] | None = None
 
         try:
             for page_num in range(1, self._max_pages + 1):
@@ -221,6 +225,23 @@ class NavigationOrchestrator:
                     # Aguarda SPA renderizar os campos após o clique
                     await self._wait_for_stable_dom()
                     continue
+
+                # Guard anti-loop: se reabrimos a MESMA página depois de clicar
+                # "Avançar" (conjunto idêntico de campos), o portal recusou o
+                # avanço — tipicamente um campo obrigatório não satisfeito. Falha
+                # rápido e avisa, em vez de re-preencher a mesma página até max_pages.
+                signature = frozenset(f.selector for f in raw_fields)
+                if signature == previous_signature:
+                    logger.error(
+                        "page_not_advancing",
+                        page=page_num,
+                        fields=len(raw_fields),
+                        review_pending=len(self._review_queue),
+                        reason="portal recusou avançar — provável campo obrigatório não preenchido",
+                    )
+                    report.result = NavigationResult.STUCK_PAGE
+                    break
+                previous_signature = signature
 
                 form_page = FormPage(page_number=page_num, fields=raw_fields)
 

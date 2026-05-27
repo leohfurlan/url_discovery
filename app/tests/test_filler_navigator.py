@@ -420,3 +420,50 @@ class TestNavigationOrchestrator:
                 report = await orchestrator.run("test_portal")
 
         assert report.result == NavigationResult.NEXT_BUTTON_NOT_FOUND
+
+    @pytest.mark.asyncio
+    async def test_stuck_page_fails_fast(self):
+        """Se a mesma página reaparece após clicar Avançar, aborta com STUCK_PAGE
+        em vez de re-preencher até max_pages."""
+        from infrastructure.browser.navigator import NavigationOrchestrator, NavigationResult
+
+        field = _make_field()
+
+        page = _make_mock_page()
+        page.url = "https://portal.example.com/form"
+        page.screenshot = AsyncMock()
+
+        classifier = AsyncMock()
+        classified = _make_field()
+        classified.semantic_type = SemanticType.RAZAO_SOCIAL
+        classifier.classify = AsyncMock(return_value=[classified])
+
+        generator = MagicMock()
+        generator.generate = MagicMock(return_value="Fake")
+
+        with patch("infrastructure.browser.navigator.DOMCrawler") as MockCrawler:
+            mock_crawler_instance = AsyncMock()
+            # Sempre os MESMOS campos → a página nunca muda.
+            mock_crawler_instance.extract_fields = AsyncMock(return_value=[field])
+            MockCrawler.return_value = mock_crawler_instance
+
+            with patch("infrastructure.browser.navigator.FormFiller") as MockFiller:
+                mock_filler_instance = AsyncMock()
+                mock_filler_instance.fill_page = AsyncMock(return_value=[])
+                mock_filler_instance.take_screenshot = AsyncMock(return_value=Path("/tmp/test.png"))
+                MockFiller.return_value = mock_filler_instance
+
+                orchestrator = NavigationOrchestrator(page=page, classifier=classifier, generator=generator, max_pages=15)
+                # Isola a lógica do guard: avanço "funciona", não é submit final,
+                # não é página de sucesso.
+                orchestrator._next_is_final_submit = AsyncMock(return_value=False)
+                orchestrator._click_next = AsyncMock(return_value=True)
+                orchestrator._is_success_page = AsyncMock(return_value=False)
+                orchestrator._wait_for_stable_dom = AsyncMock()
+                orchestrator._advance_past_validation = AsyncMock()
+
+                report = await orchestrator.run("test_portal")
+
+        assert report.result == NavigationResult.STUCK_PAGE
+        # Página 1 processada; página 2 (idêntica) abortada antes de re-preencher.
+        assert len(report.steps) == 1

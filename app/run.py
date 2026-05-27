@@ -63,6 +63,13 @@ def _configure_logging(log_file: Path | None) -> None:
         force=True,
     )
 
+    # Silencia ruído de INFO de bibliotecas de terceiros que não é da nossa
+    # execução: o SDK google-genai loga "AFC is enabled with max remote calls"
+    # a cada chamada (AFC = Automatic Function Calling, recurso de tool-calling
+    # que não usamos) e o httpx loga cada requisição HTTP.
+    for noisy in ("google_genai", "google.genai", "httpx", "httpcore"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
     structlog.configure(
         processors=[
             structlog.processors.add_log_level,
