@@ -92,5 +92,12 @@ class CompanyProfile(BaseModel):
         merged = {k: (self_data[k] if self_data[k] is not None else other_data[k]) for k in self_data}
         return CompanyProfile(**merged)
 
+    def summary(self) -> str:
+        """Resumo compacto dos campos preenchidos, para dar contexto ao LLM
+        em decisões de fallback (ex.: escolher 'Porte de Empresa' coerente com
+        o faturamento, ou 'Tipo de Fornecedor' coerente com a atividade)."""
+        data = self.model_dump()
+        return "; ".join(f"{k}: {v}" for k, v in data.items() if v)
+
     def is_empty(self) -> bool:
         return all(v is None for v in self.model_dump().values())

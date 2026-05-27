@@ -63,6 +63,20 @@ class ClassifierPort(ABC):
         """
         raise NotImplementedError
 
+    async def choose_option(self, field: FormField, profile_summary: str = "") -> str | None:
+        """Escolhe a melhor opcao para um campo de escolha nao classificado.
+
+        Fallback usado pelo orquestrador quando ``semantic_type`` ficou ``UNKNOWN``
+        para um radio/select com mais de duas opcoes (ex.: "Tipo de Fornecedor",
+        "Porte de Empresa"), evitando o chute cego em "Nao". Recebe o campo (com
+        ``options``) e um resumo do perfil da empresa; deve retornar o texto de
+        UMA das opcoes ou ``None`` quando nao houver correspondencia segura.
+
+        Implementacao padrao nao decide (retorna ``None``). Adapters com LLM
+        sobrescrevem.
+        """
+        return None
+
     @staticmethod
     def unknown(field: FormField) -> FormField:
         """Cria uma copia do campo marcada como nao classificada."""

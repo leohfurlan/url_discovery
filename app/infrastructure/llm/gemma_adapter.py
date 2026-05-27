@@ -192,6 +192,51 @@ Campos:
             for hint in hints
         ]
 
+    async def choose_option(self, field: FormField, profile_summary: str = "") -> str | None:
+        """Escolhe a opção mais coerente com o perfil para um campo não classificado.
+
+        Faz UMA chamada ao LLM passando o enunciado, as opções e o perfil da empresa.
+        Retorna o texto de uma das opções, ou None se nada se aplica claramente
+        (sinaliza ao orquestrador que o campo precisa de revisão humana).
+        """
+        options = list(field.options)
+        if len(options) < 2 or not os.getenv("GEMINI_API_KEY"):
+            return None
+
+        numbered = "\n".join(f"{i}: {opt}" for i, opt in enumerate(options))
+        prompt = f"""
+Você ajuda a preencher o cadastro de uma empresa fornecedora num portal.
+
+Perfil da empresa:
+{profile_summary or "(sem dados — escolha pela coerência geral)"}
+
+Pergunta do formulário:
+{field.label or field.semantic_hint}
+
+Opções (índice: texto):
+{numbered}
+
+Escolha o ÍNDICE da opção que melhor corresponde ao perfil da empresa.
+Se nenhuma opção se aplica de forma clara, responda index null.
+Responda somente JSON válido, sem markdown: {{"index": 0}} ou {{"index": null}}
+""".strip()
+
+        try:
+            response = await self._client.aio.models.generate_content(
+                model=self._model,
+                contents=prompt,
+                config={"response_mime_type": "application/json"},
+            )
+            data = json.loads(response.text or "{}")
+        except Exception as exc:
+            logger.warning("choose_option_failed", selector=field.selector, error=str(exc))
+            return None
+
+        index = data.get("index") if isinstance(data, dict) else None
+        if isinstance(index, int) and 0 <= index < len(options):
+            return options[index]
+        return None
+
     def _reconstruct(self, fields: list[FormField], raw: list[dict]) -> list[FormField]:
         by_index = {
             item.get("index"): item.get("semantic_type")

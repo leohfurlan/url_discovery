@@ -94,8 +94,32 @@ class TestCallLlmSemChave:
         classifier = make_classifier()
 
         result = await classifier._call_llm([{"index": 0, "label": "CNPJ"}])
-   
+
         assert result == [{"index": 0, "semantic_type": "unknown"}]
+
+
+class TestChooseOption:
+    @pytest.mark.asyncio
+    async def test_sem_api_key_retorna_none(self, monkeypatch):
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        classifier = make_classifier()
+        field = FormField(
+            tag="input", field_type=FieldType.RADIO, label="Porte",
+            selector="#p", options=["ME", "EPP", "Grande"],
+        )
+
+        assert await classifier.choose_option(field, "razao_social: ACME") is None
+
+    @pytest.mark.asyncio
+    async def test_menos_de_duas_opcoes_retorna_none(self, monkeypatch):
+        monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+        classifier = make_classifier()
+        field = FormField(
+            tag="input", field_type=FieldType.RADIO, label="x",
+            selector="#x", options=["única"],
+        )
+
+        assert await classifier.choose_option(field) is None
 
 
 @pytest.mark.skipif(

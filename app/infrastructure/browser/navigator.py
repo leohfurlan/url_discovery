@@ -22,11 +22,15 @@ from typing import Callable, Awaitable
 import structlog
 from playwright.async_api import Page
 
-from domain.entities.form import ExecutionResult, FormField, FormPage, FormSession, FormStatus
+from domain.entities.company_profile import CompanyProfile
+from domain.entities.form import (
+    ExecutionResult, FieldType, FormField, FormPage, FormSession, FormStatus, SemanticType,
+)
 from domain.services.classifier_port import ClassifierPort
 from domain.services.generator import DataGenerator
 from infrastructure.browser.crawler import DOMCrawler
 from infrastructure.browser.filler import FormFiller
+from infrastructure.llm.heuristic import _is_binary_yes_no
 
 logger = structlog.get_logger(__name__)
 
@@ -112,6 +116,9 @@ class RunReport:
     final_url: str = ""
     session: FormSession | None = None
     error: str | None = None
+    # Campos que o agente não soube preencher com segurança (Ajuste 1):
+    # radio/select sem classificação onde nem o fallback do LLM decidiu.
+    requires_human_review: list[FormField] = field(default_factory=list)
 
 
 class NavigationOrchestrator:
@@ -139,6 +146,7 @@ class NavigationOrchestrator:
         screenshot_dir: str | None = None,
         slow_fill: bool = False,
         allow_submit: bool = False,
+        profile: CompanyProfile | None = None,
         on_page_done: Callable[[StepReport], Awaitable[None]] | None = None,
     ) -> None:
         self._page = page
@@ -149,7 +157,10 @@ class NavigationOrchestrator:
         self._screenshot_dir = screenshot_dir
         self._slow_fill = slow_fill
         self._allow_submit = allow_submit
+        self._profile_summary = profile.summary() if profile else ""
         self._on_page_done = on_page_done
+        # Campos sem preenchimento seguro, acumulados ao longo da execução.
+        self._review_queue: list[FormField] = []
 
     # ------------------------------------------------------------------
     # API pública
@@ -275,6 +286,7 @@ class NavigationOrchestrator:
 
         report.final_url = self._page.url
         report.session = session
+        report.requires_human_review = list(self._review_queue)
         return report
 
     # ------------------------------------------------------------------
@@ -336,6 +348,50 @@ class NavigationOrchestrator:
         except Exception:
             return False
 
+    async def _resolve_value(self, field: FormField) -> str | None:
+        """Decide o valor de um campo, com fallback inteligente para o caso unknown.
+
+        Fluxo (Ajuste 1):
+          - radio/select NÃO binário com >2 opções e sem classificação → pede ao
+            LLM a melhor opção dado o perfil (em vez de chutar "Não" cegamente).
+            Sem resposta segura → registra para revisão humana e não preenche.
+          - radio binário Sim/Não unknown → mantém o default conservador "Não"
+            (delegado ao DataGenerator).
+          - demais casos → geração normal (perfil + fake).
+        """
+        st = field.semantic_type
+        is_unknown = st in (SemanticType.UNKNOWN, SemanticType.DESCONHECIDO)
+        is_choice = field.field_type in (FieldType.RADIO, FieldType.SELECT, FieldType.COMBOBOX)
+
+        if is_unknown and is_choice and len(field.options) > 2 and not _is_binary_yes_no(field):
+            choice = await self._classifier.choose_option(field, self._profile_summary)
+            if choice:
+                logger.info(
+                    "llm_fallback_resolved",
+                    selector=field.selector,
+                    label=(field.label or "")[:60] or None,
+                    choice=str(choice)[:60],
+                )
+                return choice
+            self._review_queue.append(field)
+            logger.warning(
+                "human_review_needed",
+                selector=field.selector,
+                label=(field.label or "")[:80] or None,
+                reason="unknown_multi_option",
+                options=len(field.options),
+            )
+            return None
+
+        if is_unknown and field.field_type == FieldType.RADIO and _is_binary_yes_no(field):
+            logger.info(
+                "field_default_no",
+                selector=field.selector,
+                label=(field.label or "")[:60] or None,
+            )
+
+        return self._generator.generate(st, field=field)
+
     async def _fill_until_stable(
         self,
         initial_fields: list[FormField],
@@ -378,7 +434,9 @@ class NavigationOrchestrator:
 
             for f in classified:
                 if f.semantic_type and f.selector not in session.filled_values:
-                    session.filled_values[f.selector] = self._generator.generate(f.semantic_type, field=f)
+                    value = await self._resolve_value(f)
+                    if value is not None:
+                        session.filled_values[f.selector] = value
 
             form_page_round = FormPage(page_number=page_num, fields=classified)
             round_failures = await filler.fill_page(form_page_round, session)

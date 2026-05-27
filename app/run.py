@@ -228,6 +228,7 @@ async def _run(
             max_pages=max_pages,
             screenshot_dir=screenshot_dir,
             allow_submit=allow_submit,
+            profile=profile,
         )
 
         typer.echo("→ Iniciando preenchimento...")
